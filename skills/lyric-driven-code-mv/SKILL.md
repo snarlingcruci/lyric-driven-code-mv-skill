@@ -9,27 +9,43 @@ description: Use when a music video needs code animation that responds to lyric 
 
 ## 工作流程
 
-1. **固定输入与证据。** 确认歌曲文件及版本、校对歌词、截取范围、画幅、人物设定和交付范围。分析参考片时分别记录可见事实、音频核对结果和实现推断；只有完成全时段检查才称“看完整片”。作者工具没有源码或声明证据时标为未知。缺少音频时可先写分镜，将音乐落点标为待核对。
-2. **建立两条时间线。** 标注句起止、段落、重要重音和留白；语义表记录人物关系、意象和动作。读 [时间与分镜](references/storyboard-and-timing.md)，统一成片时间和原曲偏移。自动歌词、节拍和能量只作候选，试听修正后才标记为已核对。
-3. **设计任务与世界。** 每镜写目标→行动→反馈→结果。为反复意象安排首次出现、变化和再出现；重复副歌增加信息或后果。保留人物身份、装束和道具的来龙去脉。像素美术、视角变化或双人叙事读 [像素世界与演出](references/pixel-game-visuals.md)。
-4. **选择一种实现路线。** 沿用用户指定框架及现有工程；未指定时优先 HTML + Canvas/SVG + HyperFrames，选择 React 时优先 Remotion。实现前读 [依赖与交付](references/dependencies-and-delivery.md)，列出必需项、已有项和可选项。安装包、下载浏览器/模型、使用 API 或付费服务前先说明，沿用已有明确授权。无需为预排演的视频增加真实联网、游戏操作或物理系统。
-5. **完成代表片段。** 新作品先完成约 10–15 秒，包含人物动作、歌词意象任务、反馈变化及转场；用户指定其他长度或修改已有工程时按其范围。将场景画法与分镜数据分离。每帧由当前时间直接求值，粒子固定种子；道具和任务状态由时间/事件前缀推导，支持任意跳播。
-6. **扩展与验收。** 先运行分镜校验，再预览代表片段，校准重要动作峰值和句尾。确认语义、连续性、字幕和像素质量后扩展整曲。导出按交付参考执行 FFprobe、抽帧、解码及完整播放检查，报告实际完成的检查和未解决项。
+1. **固定输入与证据。** 确认歌曲文件及版本、校对歌词、截取范围、画幅、人物设定和交付范围。自己找歌时先读 [音频与授权](references/audio-and-rights.md)，核对作品及录音的使用条件。分析参考片时分别记录可见事实、音频核对结果和实现推断；只有完成全时段检查才称“看完整片”。作者工具无源码或声明证据时标为未知。
+2. **建立两条时间线。** 标注句起止、段落、重要重音和留白；语义表记录人物关系、意象和动作。读 [时间与分镜](references/storyboard-and-timing.md)，统一成片坐标与原曲偏移。已有 FFmpeg 时先用 `scripts/analyze-audio.mjs` 生成离线能量、停顿、起音和 BPM/相位候选；不把候选当歌词对齐。按下表记录证据，无法试听也可完成透明标注的草稿。
+3. **设计任务与世界。** 每镜写目标→行动→反馈→结果。反复意象安排首次出现、变化和再出现；重复副歌增加信息或后果。保留人物身份、装束和道具来龙去脉。像素美术、摄像机、字幕和双人叙事读 [像素世界与演出](references/pixel-game-visuals.md)。
+4. **选择一种实现路线。** 沿用用户指定框架及现有工程。无框架且需要最小可运行工程时，复制 `assets/templates/starter/`：仅 Node 内置模块与 FFmpeg 即可预览和导出。HTML 动效工程可采用 HyperFrames，React 工程优先 Remotion。实现前读 [依赖与交付](references/dependencies-and-delivery.md)，列出必需项、已有项和可选项；安装包、下载浏览器/模型/字体、使用 API 或付费服务前先说明并沿用已有授权。
+5. **完成代表片段。** 新作品先完成约 10–15 秒，包含人物动作、歌词意象任务、反馈变化及转场；用户指定其他长度或修改已有工程时按其范围。分离场景画法与分镜数据，每帧由时间直接求值，粒子固定种子。出口转场占前镜尾段，下一镜固定 `local=0` 预卷，不增加总时长。执行结构校验和 `scripts/qa.mjs` 的重复、逆序、乱序像素比较。
+6. **扩展与验收。** 先预览代表片段，核对动作峰值、句尾、转场、字幕与摄像机边缘，再扩展已授权范围。导出后执行 FFprobe、完整解码、接触表和关键帧检查；具备播放条件时完整播放，逐项记录真实完成的检查。不能试听时交付 `draft`，明确待核对落点，不能声称音画已核对。
 
-## 分镜模板与校验
+## 音乐证据与交付阶段
 
-复制 [原创 12 秒示例](assets/storyboard-example.json) 并替换内容。示例音乐时点是演示值，未对应真实录音。小项目可用一个 JSON；整曲可拆为 song、lyrics、music、storyboard 文件，再组装成相同数据结构供校验。
+| `music.status` | 条件 | 交付义务 |
+|---|---|---|
+| `illustrative` | 自编时点、占位音轨或原创演示 | 开头显示“演示时点”，记录 `presentationNotice:true`；说明不是对应真实歌曲的对齐结果 |
+| `draft` | 已有音频，机器分析或未经试听的标注 | `evidence.method` 写推定方法，`limitations` 写误差来源和待核对项；允许交付草稿成片 |
+| `verified` | 人工核对了相关音频、歌词与关键落点 | 记录 `evidence.reviewer`、含时区完整时间戳 `reviewedAt`（如 `2026-11-17T08:00:00Z`），交付说明写核对范围 |
+
+自动分析不能升级为 `verified`。逐字时点按句长均分时，字幕说明为视觉填充；BPM 的半速/双速歧义、伴奏起音、拖音及源偏移均可能造成误差。缺少音频时先交付 `illustrative` 分镜或演示，不因无法试听无限等待。状态与授权是两项独立条件，草稿状态不能代替发布许可。
+
+## 模板与命令
+
+复制 [原创 12 秒分镜](assets/storyboard-example.json) 并替换内容。最小工程见 [starter 说明](assets/templates/starter/README.md)，自带纸船、两岸灯光、尾段转场、高分辨率字幕及本地生成的原创节奏。模板不自动读取 JSON；真实歌曲按模板说明改音轨输入、SCENES/CAPTIONS、画法与演示提示，并同步分镜。
+
+以下在 skill 目录运行；其他目录使用脚本的绝对路径：
 
 ```sh
-node scripts/validate-storyboard.mjs path/to/storyboard.json
+node scripts/analyze-audio.mjs path/to/song.wav --start 37.2 --duration 12 --out work/audio-analysis.json
+node scripts/validate-storyboard.mjs assets/storyboard-example.json
+node scripts/validate-storyboard.mjs path/to/storyboard.json --delivery
+node scripts/qa.mjs assets/templates/starter/frame.mjs --duration 12 --fps 30 --storyboard assets/storyboard-example.json --out work/qa.json
+node assets/templates/starter/export.mjs --out work/demo.mp4
 ```
 
-在 skill 目录运行，或使用脚本的绝对路径。工具只检查时间范围、镜头覆盖、引用和像素尺寸等结构，不证明歌词语义正确、实际音画同步或已成功渲染。字段定义见时间参考。
+校验器保留 `validateStoryboard(data) → errors[]`，新增 `analyzeStoryboard(data,{beatToleranceMs,delivery}) → {errors,warnings}`。普通提示不改变退出码，`--strict` 将提示视为失败，`--delivery` 检查发布记录。跨镜歌词、显式踩拍事件、HUD 支撑及授权缺项都有可定位的提示；工具不证明语义正确、许可有效或实际音画同步。
 
 ## 完成标准
 
-- 去掉字幕，动作仍能说明段落含义；HUD 变化能追溯到行动，道具先获得再使用。
+- 去掉字幕，动作仍能说明段落含义；HUD 变化可追溯到行动，道具先获得再使用。
 - 重复段落有发展，等待、失败、完成及留白与歌曲情绪相称。
-- 同一帧重复渲染和乱序求值一致；首尾、每镜及转场不存在状态漂移。
-- 成片的音视频流、时长、画幅和帧率正确；完整播放确认音乐落点和字幕可读。
-- 交付可编辑源文件、时间/分镜数据、本地资源清单、所选依赖锁文件、成片和简短验收记录；仅请求报告或分镜时交付对应成果。
+- 同帧重复和乱序求值一致，首尾、每镜及转场没有状态漂移；摄像机移动不露黑，字幕清晰。
+- 成片音视频流、时长、画幅和帧率正确；音乐证据状态及实际检查范围写清楚。
+- 交付可编辑源文件、分镜与分析数据、资源来源/许可/署名、所选依赖锁文件（使用依赖时）、成片和简短验收记录。仅请求报告、分镜或草稿时交付对应阶段，不擅自扩展整曲。
