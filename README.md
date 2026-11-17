@@ -80,9 +80,9 @@
 
 仓库内置一套 **12 秒纸船与两岸灯光演示**，包含人物动作、场景变化、摄像机留边、尾段转场、高分辨率字幕和本地生成的原创节奏。可以先把这个工程跑通，再让 AI 按你的歌曲与分镜改写。
 
-- **离线音频分析**：使用 Node 内置模块与 FFmpeg，输出能量、停顿、起音和 BPM/相位候选。
+- **离线音频分析**：使用 Node 内置模块与 FFmpeg，输出能量、停顿、起音和 BPM/相位候选；支持输入已知 BPM、合并邻近候选，并明确标识低置信网格。
 - **分镜校验**：检查时间范围、镜头覆盖和角色/道具引用，并提示跨镜歌词、显式踩拍、HUD 支撑与授权记录缺项。
-- **确定性 QA**：重复、逆序和乱序求值同一批帧，比较像素结果，帮助发现跳播和渲染时的状态漂移。
+- **确定性 QA**：预热后重复、逆序和乱序求值同一批帧，单独记录首次光栅差异；适配器可提供清理钩子，让浏览器等资源在检查后正常退出。
 - **两种导出方式**：管道直出适合快速验证；PNG 落盘与恢复适合保留渲染进度。
 - **画面验收**：通过接触表查看整体叙事，再检查每镜和转场的关键帧。
 
@@ -113,14 +113,23 @@ node work/my-mv/export.mjs --out work/demo.mp4
 node skills/lyric-driven-code-mv/scripts/qa.mjs work/my-mv/frame.mjs --duration 12 --fps 30 --out work/qa.json
 ```
 
-默认输出 1920×1080、30 fps；开头标注“演示时点 · 原创合成节奏”。预览与恢复导出说明见 [starter README](skills/lyric-driven-code-mv/assets/templates/starter/README.md)。这是独立演示，CLI 不读取分镜 JSON，也不提供真实音轨参数。制作真实歌曲时按该说明改音轨输入、`SCENES/CAPTIONS`、场景画法和演示提示，并与分镜 JSON 保持同步后核对落点。
+默认输出 1920×1080、30 fps；开头标注“演示时点 · 原创合成节奏”。也可以让分镜 JSON 直接控制项目时长、帧率、尺寸、字幕、镜头边界、转场与音乐状态：
+
+```powershell
+node work/my-mv/export.mjs --storyboard skills/lyric-driven-code-mv/assets/storyboard-example.json --out work/storyboard-demo.mp4
+node work/my-mv/export.mjs --storyboard work/storyboard.json --audio 'path/to/song.wav' --out work/song-mv.mp4
+node skills/lyric-driven-code-mv/scripts/qa.mjs work/my-mv/frame.mjs --storyboard work/storyboard.json --out work/song-qa.json
+```
+
+模板通过 `SCENE_RENDERERS[scene.id]` 选择画法；内置 `send` 与 `receive`，新增故事镜头时由 AI 实现对应画法。真实歌曲的字幕和时窗只修改 JSON，`draft` 状态自动烧入“待核对落点”提示；音频为原曲时按 `project.sourceOffset` 裁剪。预览、音轨时基与恢复规则见 [starter README](skills/lyric-driven-code-mv/assets/templates/starter/README.md)。
 
 ## 开发与检查
 
 ```powershell
 node skills/lyric-driven-code-mv/scripts/analyze-audio.mjs 'path/to/song.wav' --start 37.2 --duration 12 --out work/analysis.json
+node skills/lyric-driven-code-mv/scripts/analyze-audio.mjs 'path/to/song.wav' --start 37.2 --duration 12 --bpm 110 --out work/known-bpm.json
 node skills/lyric-driven-code-mv/scripts/validate-storyboard.mjs skills/lyric-driven-code-mv/assets/storyboard-example.json --delivery
 node --test
 ```
 
-分镜结构校验与像素一致性不证明授权有效、逐词对齐或已经试听。使用说明见 [SKILL.md](skills/lyric-driven-code-mv/SKILL.md)、[时间与分镜](skills/lyric-driven-code-mv/references/storyboard-and-timing.md)、[像素/字幕](skills/lyric-driven-code-mv/references/pixel-game-visuals.md)、[音频/授权](skills/lyric-driven-code-mv/references/audio-and-rights.md)、[依赖/验收](skills/lyric-driven-code-mv/references/dependencies-and-delivery.md)。
+测试可使用 `FFMPEG_PATH` / `FFPROBE_PATH` 指向已有程序；PATH 中缺少工具时只跳过需要实际解码/编码的用例，并说明原因。显式配置无效路径会报错。`--strict` 把结构警告升级为失败，通过它仍需核听；草稿交付须附 `music.pendingChecks` 具体时间区间与检查内容。使用说明见 [SKILL.md](skills/lyric-driven-code-mv/SKILL.md)、[时间与分镜](skills/lyric-driven-code-mv/references/storyboard-and-timing.md)、[像素/字幕](skills/lyric-driven-code-mv/references/pixel-game-visuals.md)、[音频/授权](skills/lyric-driven-code-mv/references/audio-and-rights.md)、[依赖/验收](skills/lyric-driven-code-mv/references/dependencies-and-delivery.md)。
