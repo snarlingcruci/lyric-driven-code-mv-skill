@@ -1,6 +1,6 @@
 # 12 秒像素 MV 最小工程
 
-这是原创技术演示《未抵达的灯》，用于检验纯帧、像素摄像机、转场、字幕与导出。双语句子是演示文案，时间是演示时点；`demo-beat.wav` 由代码原创合成，只演示节奏，不对应任何真实歌曲或歌词。开头会烧入“演示时点 · 原创合成节奏”。
+这是原创技术演示《未抵达的灯》，用于检验纯帧、像素摄像机、转场、字幕与导出。双语句子是演示文案，时间是演示时点；默认 `audio.wav` 由代码原创合成，只演示节奏，不对应任何真实歌曲或歌词。开头会烧入“演示时点 · 原创合成节奏”。
 
 不需要 npm 包、API Key、账号、外部服务或下载字体。需要本机已有 Node.js、ffmpeg（含 libx264、AAC、libass）和 ffprobe。模板不会安装软件。现有 HyperFrames、Remotion、Canvas 或其他框架工程应沿用原工程；通过纯帧接口适配所需能力，不强制替换框架。
 
@@ -52,7 +52,20 @@ fb.rect(-192, -108, 768, 432, [19, 30, 51]);
 
 ## 接入真实歌曲
 
-当前 `export.mjs` 只合成上述示例音轨，时间线与像素画法也来自本模板；它不会读取 storyboard JSON，因此只修改 JSON 不会改变导出的影片。接入真实歌曲时，需要同时修改 `export.mjs` 的 WAV 生成或 ffmpeg 音频输入、`frame.mjs` 的 `SCENES` / `CAPTIONS` / 场景画法，以及 `createASS` 和预览中的开头演示提示，再与 storyboard JSON 的音轨路径、片段时间、歌词、事件和转场保持同步。真实音轨应为所选片段的已授权素材；依据已核对的时点更新演示提示，不把本示例合成节奏冒充实测结果。已有框架的音轨和字幕入口优先继续使用原工程。
+`--storyboard <json>` 让 JSON 成为时间线与字幕的真源。`project.duration/fps/width/height/seed` 控制输出，`lyrics[].text`（或 `zh`）及可选 `en` 控制字幕，`scenes[].start/end/exit` 控制镜头边界和转场。CLI 显式给出与 JSON 冲突的 fps、尺寸或 seed 会失败；先在 JSON 修改这些参数。分镜时间全部为成片秒，`timebase` 固定 `clip`。本模板画法使用384×216虚拟网格，输出尺寸须为同一整数倍。
+
+```powershell
+node export.mjs --storyboard C:\你的工程\storyboard.json --audio C:\你的素材\song.wav --out C:\你的输出\song-mv.mp4
+node export.mjs --storyboard C:\你的工程\storyboard.json --audio C:\你的素材\song.wav --preview
+```
+
+`--audio` 优先于 `project.audio.path`；后者相对于 JSON 所在目录。`audio.timebase=source` 时从 `project.sourceOffset` 截取 `project.duration` 秒，`clip` 时从音轨0秒截取。源音轨长度不足直接失败。未提供显式音轨的 `illustrative` 分镜使用原创合成节奏；`draft/verified` 必须能读取真实音频，不能回退到演示音乐。`illustrative` 自动显示演示提示；`draft` 全时段显示“草稿 · 待核对落点”；`verified` 按分镜提供的证据记录核对结果。
+
+`SCENE_RENDERERS[scene.id]` 是唯一画法注册表，内置 `send` 与 `receive`。两个内置演出按镜头局部时长归一化，换镜头时窗会改变实际动作节奏；事件中的文字描述仍需由对应画法实现，新 ID 缺画法会失败。JSON 能调整演出时间，不能自动产生新人物动作。完整分镜仍先用 `validate-storyboard.mjs --delivery` 校验叙事、事件、授权与音乐证据；导出另用自包含 `timeline.mjs` 校验实际可执行字段，复制模板后也能独立运行。
+
+starter 当前实现通用分镜规范的执行子集：末镜仅支持 `exit:{type:"cut",dur:0}`。通用规范允许的末镜 `target:"background"` 转场需由现有框架或自定义渲染适配实现；通用分镜校验通过后，仍需满足 starter 的执行范围。
+
+预览和导出读取同一份已加载 JSON；修改文件后重启预览。`qa.mjs --storyboard` 会调用模块的 `frameOptionsForStoryboard(data)`，将同一时间线与 seed 传入像素检查；已有浏览器适配器可导出这个可选钩子。恢复指纹含 JSON、音频内容、sourceOffset 和源码，修改任何一项须使用新帧目录。`FFMPEG_PATH` / `FFPROBE_PATH` 可配置已有工具路径。
 
 ## 两镜与转场
 
@@ -67,7 +80,7 @@ exit: { type: 'ripple', dur: 0.9, origin: [0.55, 0.62] }
 
 ## 字幕与验收
 
-中文与英文文案保存在 `CAPTIONS`。导出 ASS 的 `PlayResX/Y` 等于最终输出尺寸，最近邻放大画面后才加字幕。底部双语字幕保留约7%下边距、8%左右安全区，带暗板；演示提示在上部安全区。不要先在384网格画中文后一起放大。
+默认演示文案保存在 `CAPTIONS`；指定分镜时从 `lyrics[]` 读取，中文与英文均由 JSON 提供。导出 ASS 的 `PlayResX/Y` 等于最终输出尺寸，最近邻放大画面后才加字幕。底部双语字幕保留约7%下边距、8%左右安全区，带暗板；音乐状态提示在上部安全区。不要先在384网格画中文后一起放大。
 
 Windows 默认使用已有 `Microsoft YaHei`；可通过 `--font "已有字体名称"` 指定本机字体。浏览器与 ffmpeg 的字体选择和排版可能随系统变化，模板不下载字体。导出检测到缺字会失败并提示换用已安装字体，交付字幕以成片为准。
 

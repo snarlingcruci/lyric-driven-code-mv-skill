@@ -1,4 +1,5 @@
 // 共享纯帧模块：无 DOM、无计时器、无文件读写、无累积动画状态。
+import { createTimeline } from './timeline.mjs';
 export const WIDTH = 384;
 export const HEIGHT = 216;
 export const DURATION = 12;
@@ -172,16 +173,16 @@ export function renderScene(index, local, options = {}) {
   if (index === 0) {
     const travel = ease((t - 1.3) / 4.7), reach = 1 - ease((t - 1.3) / 1.2);
     person(fb, 92, 137, palette.coatA, reach);
-    person(fb, 300, 166, palette.coatB, 0, -1);
+    person(fb, 308, 171, palette.coatB, 0, -1);
     boat(fb, mix(109, 226, travel), 147 + Math.sin(travel * Math.PI) * 13, t);
   } else {
     person(fb, 92, 137, palette.coatA, ease((t - 4.5) / 0.8));
     const receive = ease(t / 3.3), reach = ease((t - 2.3) / 0.8) * (1 - ease((t - 3.5) / 0.6));
-    person(fb, 300, 166, palette.coatB, reach, -1);
+    person(fb, 308, 171, palette.coatB, reach, -1);
     // 纸船始终停在右岸之外；到达之前被弯流推回，不用“接住”镜头偷换结果。
     const setback = ease((t - 3.1) / 1.8);
     boat(fb, mix(226, 259, receive) - setback * 15, mix(147, 160, receive), t + 6);
-    if (t >= 3.8) { fb.rect(296, 147, 3, 5, palette.light); fb.pixel(297, 146, palette.bright); }
+    if (t >= 3.8) { fb.rect(304, 152, 3, 5, palette.light); fb.pixel(305, 151, palette.bright); }
     if (response > 0.4) {
       // 受阻后的回应：自有岸灯亮起，纸船留河心而两岸产生联系。
       const radius = 6 + (t - 3.4) * 8;
@@ -191,13 +192,16 @@ export function renderScene(index, local, options = {}) {
   return fb.frame();
 }
 
-export function resolveTimeline(time) {
+export function resolveTimeline(time, timeline = { duration: DURATION, scenes: SCENES }) {
   if (!Number.isFinite(time)) throw new Error('时间 t 必须为有限秒数');
-  const t = clamp(time, 0, DURATION);
-  const index = t < SCENES[0].end ? 0 : 1, scene = SCENES[index];
+  const { duration, scenes } = timeline;
+  const t = clamp(time, 0, duration);
+  let index = scenes.findIndex(scene => t < scene.end);
+  if (index < 0) index = scenes.length - 1;
+  const scene = scenes[index];
   const result = { index, local: t - scene.start, nextIndex: null, nextLocal: null, progress: null, exit: scene.exit };
   const start = scene.end - scene.exit.dur;
-  if (index + 1 < SCENES.length && scene.exit.type !== 'cut' && scene.exit.dur > 0 && t >= start && t < scene.end) {
+  if (index + 1 < scenes.length && scene.exit.type !== 'cut' && scene.exit.dur > 0 && t >= start && t < scene.end) {
     result.nextIndex = index + 1; result.nextLocal = 0;
     result.progress = clamp((t - start) / scene.exit.dur, 0, 1);
   }
@@ -227,10 +231,22 @@ export function blendFrames(previous, next, progress, exit = SCENES[0].exit) {
 
 /** drawScene 接口供已有工程适配；返回同尺寸 RGBA，不改变现有框架。 */
 export function renderTimelineFrame(time, drawScene = renderScene, options = {}) {
-  const state = resolveTimeline(time), current = drawScene(state.index, state.local, options);
+  const state = resolveTimeline(time, options.timeline), current = drawScene(state.index, state.local, options);
   if (state.nextIndex === null) return current;
   const next = drawScene(state.nextIndex, 0, options);
   return blendFrames(current, next, state.progress, state.exit);
 }
 
-export function renderFrame(t, options = {}) { return renderTimelineFrame(t, renderScene, options); }
+// 分镜负责时窗，画法只注册在这里。新增scene.id时实现自己的纯帧函数。
+export const SCENE_RENDERERS = Object.freeze({ send: (local, options) => renderScene(0, local, options), receive: (local, options) => renderScene(1, local, options) });
+export function frameOptionsForStoryboard(data) { return { seed: data.project.seed, timeline: createTimeline(data, Object.keys(SCENE_RENDERERS)) }; }
+export function renderFrame(t, options = {}) {
+  if (!options.timeline) return renderTimelineFrame(t, renderScene, options);
+  const draw = (index, local, opts) => {
+    const scene = opts.timeline.scenes[index], renderer = SCENE_RENDERERS[scene.id];
+    if (!renderer) throw new Error(`镜头${scene.id}没有注册画法`);
+    // 两个内置演出以6秒为设计时长；实际镜头窗口由JSON决定。
+    return renderer(local * 6 / (scene.end - scene.start), opts);
+  };
+  return renderTimelineFrame(t, draw, options);
+}
