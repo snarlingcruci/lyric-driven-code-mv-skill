@@ -5,7 +5,13 @@ import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { validateStoryboard } from '../skills/lyric-driven-code-mv/scripts/validate-storyboard.mjs';
+import * as storyboardValidator from '../skills/lyric-driven-code-mv/scripts/validate-storyboard.mjs';
+
+const { validateStoryboard } = storyboardValidator;
+const analyzeStoryboard = (...args) => {
+  assert.equal(typeof storyboardValidator.analyzeStoryboard, 'function', 'the analyzer must expose errors separately from creative warnings');
+  return storyboardValidator.analyzeStoryboard(...args);
+};
 
 const script = fileURLToPath(new URL('../skills/lyric-driven-code-mv/scripts/validate-storyboard.mjs', import.meta.url));
 
@@ -208,6 +214,364 @@ test('CLI --help prints usage and exits zero', () => {
 
 test('CLI missing or extra input paths print usage and exit one', () => {
   for (const args of [[], ['one.json', 'two.json']]) {
+    const result = runCli(args);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /用法|usage/i);
+  }
+});
+
+function deliveryStoryboard() {
+  const data = validStoryboard();
+  Object.assign(data.project.audio, {
+    license: 'CC BY 4.0', credit: 'Example artist — Example song',
+    url: 'https://example.test/song', licenseUrl: 'https://example.test/license',
+    use: 'Include the audio in this music video and publish it with attribution',
+  });
+  data.music.evidence = { method: 'Listen and align marked attacks', limitations: 'Tempo can drift between the manually checked attacks' };
+  return data;
+}
+
+const warningsAt = (analysis, path) => analysis.warnings.filter(message => message.startsWith(path + ':'));
+
+test('analyzer keeps old valid data compatible and reports missing audio permission as a warning', () => {
+  const data = validStoryboard();
+  const result = analyzeStoryboard(data);
+  assert.deepEqual(result.errors, []);
+  assert.ok(result.warnings.every(message => typeof message === 'string'));
+  assert.equal(warningsAt(result, 'project.audio').length, 1);
+  assert.deepEqual(validateStoryboard(data), []);
+});
+
+test('structured exits can replace legacy text and permit all supported creative transitions', () => {
+  for (const type of ['cut', 'dissolve', 'ripple', 'water']) {
+    const data = validStoryboard();
+    delete data.scenes[0].exitTransition;
+    data.scenes[0].exit = { type, dur: type === 'cut' ? 0 : 0.75, origin: [0, 1], target: 'remember' };
+    assert.deepEqual(validateStoryboard(data), [], type);
+  }
+});
+
+test('legacy free text exits and structured supplemental exits remain valid', () => {
+  const data = validStoryboard();
+  data.scenes[0].exitTransition = '随冬日记忆消散，镜头自由留白';
+  data.scenes[0].exit = { type: 'dissolve', dur: 0.5 };
+  assert.deepEqual(validateStoryboard(data), []);
+});
+
+test('the final structured non-cut exit must name the background explicitly', () => {
+  const data = validStoryboard();
+  data.scenes[1].exit = { type: 'water', dur: 1 };
+  assert.ok(validateStoryboard(data).some(message => /scenes\[1\]\.exit\.target/.test(message)));
+  data.scenes[1].exit.target = 'background';
+  assert.deepEqual(validateStoryboard(data), []);
+  data.scenes[1].exit = { type: 'cut', dur: 0 };
+  assert.deepEqual(validateStoryboard(data), []);
+});
+
+const invalidExitCases = [
+  ['an unsupported structured exit type', { type: 'star-wipe', dur: 1 }, /\.type/],
+  ['a nonzero cut duration', { type: 'cut', dur: 0.1 }, /\.dur/],
+  ['a zero non-cut duration', { type: 'ripple', dur: 0 }, /\.dur/],
+  ['a negative non-cut duration', { type: 'ripple', dur: -1 }, /\.dur/],
+  ['a non-cut duration equal to scene length', { type: 'water', dur: 6 }, /\.dur/],
+  ['a non-cut duration longer than the scene', { type: 'water', dur: 7 }, /\.dur/],
+  ['a numeric string exit duration', { type: 'water', dur: '1' }, /\.dur/],
+  ['a nonfinite exit duration', { type: 'water', dur: Infinity }, /\.dur/],
+  ['an origin outside the normalized frame', { type: 'water', dur: 1, origin: [1.01, 0.5] }, /\.origin/],
+  ['a one-dimensional origin', { type: 'water', dur: 1, origin: [0.5] }, /\.origin/],
+  ['a nonnumeric origin', { type: 'water', dur: 1, origin: [0.5, '0.5'] }, /\.origin/],
+  ['a normal transition to a non-adjacent target', { type: 'dissolve', dur: 1, target: 'keep' }, /\.target/],
+  ['a normal transition to background before the final scene', { type: 'dissolve', dur: 1, target: 'background' }, /\.target/],
+  ['a malformed structured exit', null, /\.exit/],
+  ['a malformed cut target', { type: 'cut', dur: 0, target: {} }, /\.target/],
+];
+
+for (const [name, exit, expected] of invalidExitCases) {
+  test(`rejects ${name}`, () => {
+    const data = validStoryboard();
+    data.scenes[0].exit = exit;
+    const errors = validateStoryboard(data);
+    assert.ok(errors.some(message => message.startsWith('scenes[0].exit') && expected.test(message)), JSON.stringify(errors));
+  });
+}
+
+test('one lyric crossing a main scene boundary is a warning rather than an error', () => {
+  const data = validStoryboard();
+  data.lyrics[0].end = 7;
+  const result = analyzeStoryboard(data);
+  assert.deepEqual(result.errors, []);
+  assert.equal(warningsAt(result, 'lyrics[0]').length, 1);
+  assert.match(warningsAt(result, 'lyrics[0]')[0], /跨|边界/);
+});
+
+test('an intentional lyric split needs both the opt-in and an explanation', () => {
+  const data = validStoryboard();
+  data.lyrics[0].end = 7;
+  data.lyrics[0].allowSceneSplit = true;
+  assert.equal(warningsAt(analyzeStoryboard(data), 'lyrics[0]').length, 1);
+  data.lyrics[0].splitReason = '用同一行歌词连接记忆与现实';
+  assert.equal(warningsAt(analyzeStoryboard(data), 'lyrics[0]').length, 0);
+  delete data.lyrics[0].allowSceneSplit;
+  assert.equal(warningsAt(analyzeStoryboard(data), 'lyrics[0]').length, 1);
+});
+
+test('lyrics touching scene boundaries and tiny tolerated seam gaps do not count as lyric splits', () => {
+  const data = validStoryboard();
+  data.lyrics[0].end = 6;
+  data.lyrics[1].start = 6;
+  data.scenes[1].start += 5e-7;
+  assert.equal(analyzeStoryboard(data).warnings.filter(message => /^lyrics\[/.test(message)).length, 0);
+});
+
+test('beat-synced events report the nearest-grid offset only beyond the tolerance', () => {
+  const data = validStoryboard();
+  data.scenes[0].events = [
+    { at: 2.079, action: 'raise-gift', sync: 'beat' },
+    { at: 4.08, action: 'keep-gift', sync: 'beat' },
+    { at: 4.081, action: 'lower-gift', sync: 'beat' },
+  ];
+  const result = analyzeStoryboard(data);
+  assert.deepEqual(result.errors, []);
+  assert.equal(warningsAt(result, 'scenes[0].events[0].at').length, 0);
+  assert.equal(warningsAt(result, 'scenes[0].events[1].at').length, 0);
+  assert.match(warningsAt(result, 'scenes[0].events[2].at')[0], /offsetMs=81(?:\D|$)/);
+});
+
+test('the caller can choose a beat tolerance and offsets choose the closest beat', () => {
+  const data = validStoryboard();
+  data.music.beats = [0, 2, 2.2];
+  data.scenes[0].events = [{ at: 2.16, action: 'raise-gift', sync: 'beat' }];
+  assert.equal(warningsAt(analyzeStoryboard(data), 'scenes[0].events[0].at').length, 0);
+  assert.match(warningsAt(analyzeStoryboard(data, { beatToleranceMs: 30 }), 'scenes[0].events[0].at')[0], /offsetMs=-40(?:\D|$)/);
+});
+
+test('an empty beat grid warns only on explicitly beat-synced events', () => {
+  const data = validStoryboard();
+  data.music.beats = [];
+  data.scenes[0].events = [{ at: 1, action: 'observe' }, { at: 2, action: 'raise-gift', sync: 'beat' }];
+  const result = analyzeStoryboard(data);
+  assert.equal(warningsAt(result, 'scenes[0].events[0].at').length, 0);
+  assert.match(warningsAt(result, 'scenes[0].events[1].at')[0], /网格|beats/);
+});
+
+test('ordinary actions and subtitle timing do not trigger musical sync warnings', () => {
+  const data = validStoryboard();
+  data.scenes[0].events = [{ at: 1.123, action: 'observe' }, { at: 3.17, action: 'open-caption', sync: 'lyric' }];
+  assert.equal(analyzeStoryboard(data).warnings.filter(message => /events\[/.test(message)).length, 0);
+});
+
+test('a HUD without lyric support or an event explanation gets a narrative warning', () => {
+  const data = validStoryboard();
+  data.scenes[0].lyricIds = [];
+  const result = analyzeStoryboard(data);
+  assert.deepEqual(result.errors, []);
+  assert.equal(warningsAt(result, 'scenes[0].events[0].hud').length, 1);
+});
+
+test('a lyric-free instrumental HUD can explain its narrative purpose', () => {
+  for (const key of ['meaning', 'support']) {
+    const data = validStoryboard();
+    data.scenes[0].lyricIds = [];
+    data.scenes[0].events[0].hud = { count: 0, label: '独行' };
+    data.scenes[0].events[0][key] = '间奏中用计数归零表达失落';
+    assert.deepEqual(validateStoryboard(data), []);
+    assert.equal(warningsAt(analyzeStoryboard(data), 'scenes[0].events[0].hud').length, 0);
+  }
+});
+
+test('a valid event lyric reference supports the HUD without a scene-level reference', () => {
+  const data = validStoryboard();
+  data.scenes[0].lyricIds = [];
+  data.scenes[0].events[0].lyricIds = ['line-a'];
+  assert.deepEqual(validateStoryboard(data), []);
+  assert.equal(warningsAt(analyzeStoryboard(data), 'scenes[0].events[0].hud').length, 0);
+});
+
+test('an event can refer to a scene lyric before its caption begins', () => {
+  const data = validStoryboard();
+  data.scenes[0].events = [{ at: 0, action: 'foreshadow', lyricIds: ['line-a'] }];
+  assert.deepEqual(validateStoryboard(data), []);
+});
+
+test('an event lyric outside its current caption needs an explicit scene-level narrative link', () => {
+  const data = validStoryboard();
+  data.scenes[0].lyricIds = [];
+  data.scenes[0].events = [{ at: 0, action: 'foreshadow', lyricIds: ['line-a'] }];
+  assert.ok(validateStoryboard(data).some(message => /^scenes\[0\]\.events\[0\]\.lyricIds\[0\]:/.test(message)));
+  data.scenes[0].lyricIds = ['line-a'];
+  assert.deepEqual(validateStoryboard(data), []);
+});
+
+const invalidEventCases = [
+  ['an unknown event lyric', event => { event.lyricIds = ['missing']; }, /\.lyricIds\[0\]/],
+  ['an event lyric belonging to another scene', event => { event.lyricIds = ['line-b']; }, /\.lyricIds\[0\]/],
+  ['a duplicate event lyric', event => { event.lyricIds = ['line-a', 'line-a']; }, /\.lyricIds\[1\]/],
+  ['a malformed event lyric list', event => { event.lyricIds = 'line-a'; }, /\.lyricIds/],
+  ['a numeric HUD', event => { event.hud = 1; }, /\.hud/],
+  ['an array HUD', event => { event.hud = ['保留']; }, /\.hud/],
+  ['a null HUD', event => { event.hud = null; }, /\.hud/],
+  ['a blank HUD string', event => { event.hud = ' '; }, /\.hud/],
+];
+
+for (const [name, mutate, expected] of invalidEventCases) {
+  test(`rejects ${name}`, () => {
+    const data = validStoryboard();
+    mutate(data.scenes[0].events[0]);
+    assert.ok(validateStoryboard(data).some(message => message.startsWith('scenes[0].events[0]') && expected.test(message)));
+  });
+}
+
+test('delivery requires completed audio permission records but does not infer their legal validity', () => {
+  const data = deliveryStoryboard();
+  assert.deepEqual(analyzeStoryboard(data, { delivery: true }).errors, []);
+  data.project.audio.license = 'A documented custom license';
+  data.project.audio.url = 'local contract record #42';
+  assert.deepEqual(analyzeStoryboard(data, { delivery: true }).errors, []);
+  for (const key of ['license', 'credit', 'url', 'licenseUrl', 'use']) {
+    const missing = deliveryStoryboard();
+    delete missing.project.audio[key];
+    assert.ok(analyzeStoryboard(missing, { delivery: true }).errors.some(message => message.startsWith(`project.audio.${key}:`)), key);
+  }
+});
+
+test('original audio still needs rights, author credit and intended use but can omit external links', () => {
+  const data = deliveryStoryboard();
+  data.project.audio.provenance = 'original';
+  delete data.project.audio.url;
+  delete data.project.audio.licenseUrl;
+  assert.deepEqual(analyzeStoryboard(data, { delivery: true }).errors, []);
+  assert.equal(warningsAt(analyzeStoryboard(data), 'project.audio').length, 0);
+  delete data.project.audio.credit;
+  assert.ok(analyzeStoryboard(data, { delivery: true }).errors.some(message => /^project\.audio\.credit:/.test(message)));
+});
+
+test('an explicit publication use activates publication permission checks even without a delivery flag', () => {
+  for (const use of ['publish', 'public', 'commercial']) {
+    const data = validStoryboard();
+    data.project.audio.use = use;
+    assert.ok(validateStoryboard(data).some(message => /^project\.audio\.license:/.test(message)), use);
+  }
+});
+
+test('pending and unknown permission declarations remain unresolved for delivery', () => {
+  for (const marker of ['unknown', ' Pending ', 'unknown: author has not replied', 'pending confirmation', '未知', '待确认']) {
+    const data = deliveryStoryboard();
+    data.project.audio.license = marker;
+    assert.deepEqual(validateStoryboard(data), []);
+    assert.ok(warningsAt(analyzeStoryboard(data), 'project.audio').length);
+    assert.ok(analyzeStoryboard(data, { delivery: true }).errors.some(message => /^project\.audio\.license:/.test(message)));
+  }
+});
+
+test('malformed beat data suppresses misleading grid-distance diagnostics', () => {
+  const data = validStoryboard();
+  data.music.beats = [0, '2', 4];
+  data.scenes[0].events[0].sync = 'beat';
+  const result = analyzeStoryboard(data);
+  assert.ok(result.errors.some(message => /^music\.beats\[1\]:/.test(message)));
+  assert.equal(warningsAt(result, 'scenes[0].events[0].at').length, 0);
+});
+
+test('sparse beat arrays cannot crash nearest-beat diagnostics', () => {
+  const data = validStoryboard();
+  data.music.beats = new Array(2);
+  data.scenes[0].events[0].sync = 'beat';
+  const result = analyzeStoryboard(data);
+  assert.ok(result.errors.some(message => /^music\.beats\[0\]:/.test(message)));
+  assert.equal(warningsAt(result, 'scenes[0].events[0].at').length, 0);
+});
+
+test('invalid scene seams do not create a spurious main-shot lyric split warning', () => {
+  const data = validStoryboard();
+  data.lyrics[0].end = 7;
+  data.scenes[1].start = 5;
+  const result = analyzeStoryboard(data);
+  assert.ok(result.errors.length > 0);
+  assert.equal(warningsAt(result, 'lyrics[0]').length, 0);
+});
+
+test('explicitly verified music needs a reviewer and real ISO timestamp for delivery', () => {
+  const data = deliveryStoryboard();
+  data.music.status = 'verified';
+  assert.deepEqual(validateStoryboard(data), []);
+  assert.equal(warningsAt(analyzeStoryboard(data), 'music.evidence').length, 1);
+  assert.ok(analyzeStoryboard(data, { delivery: true }).errors.some(message => /^music\.evidence:/.test(message)));
+  Object.assign(data.music.evidence, { reviewer: 'Human listener', reviewedAt: '2026-11-17T08:00:00Z' });
+  assert.equal(warningsAt(analyzeStoryboard(data), 'music.evidence').length, 0);
+  assert.deepEqual(analyzeStoryboard(data, { delivery: true }).errors, []);
+  for (const reviewedAt of ['November 17, 2026', '2026-02-30T08:00:00Z', '2026-11-17', '2026-11-17T08:00:00']) {
+    data.music.evidence.reviewedAt = reviewedAt;
+    assert.ok(warningsAt(analyzeStoryboard(data), 'music.evidence').length, reviewedAt);
+    assert.ok(analyzeStoryboard(data, { delivery: true }).errors.some(message => /^music\.evidence:/.test(message)), reviewedAt);
+  }
+});
+
+test('illustrative music needs an explicit presentation notice for delivery', () => {
+  const data = deliveryStoryboard();
+  data.music.status = 'illustrative';
+  assert.deepEqual(validateStoryboard(data), []);
+  assert.equal(warningsAt(analyzeStoryboard(data), 'music.presentationNotice').length, 1);
+  assert.ok(analyzeStoryboard(data, { delivery: true }).errors.some(message => /^music\.presentationNotice:/.test(message)));
+  data.music.presentationNotice = true;
+  assert.equal(warningsAt(analyzeStoryboard(data), 'music.presentationNotice').length, 0);
+  assert.deepEqual(analyzeStoryboard(data, { delivery: true }).errors, []);
+});
+
+test('draft music can be delivered with a transparent method and limitations without claiming listening verification', () => {
+  const data = deliveryStoryboard();
+  assert.deepEqual(analyzeStoryboard(data, { delivery: true }).errors, []);
+  assert.equal(data.music.status, 'draft');
+  assert.equal(data.music.evidence.reviewer, undefined);
+  for (const key of ['method', 'limitations']) {
+    delete data.music.evidence[key];
+    assert.ok(analyzeStoryboard(data, { delivery: true }).errors.some(message => message.startsWith(`music.evidence.${key}:`)), key);
+    data.music.evidence[key] = 'Documented';
+  }
+});
+
+test('malformed optional records and invalid timing inputs never crash analyzer diagnostics', () => {
+  const cases = [null, [], { project: null }, ...[
+    d => { d.scenes[0].exit = { type: 'water', dur: { valueOf: null }, origin: [null, {}] }; },
+    d => { d.lyrics[0].end = { valueOf: null, toString: null }; },
+    d => { d.scenes[1].start = { valueOf: null, toString: null }; },
+    d => { d.music.beats = [null, {}, '2']; d.scenes[0].events[0].sync = 'beat'; },
+    d => { d.music.evidence = []; },
+    d => { d.project.audio.license = { valueOf: null, toString: null }; },
+    d => { d.scenes[0].events[0] = null; },
+    d => { d.scenes[0].events[0].lyricIds = [null, {}]; },
+  ].map(mutate => { const data = validStoryboard(); mutate(data); return data; })];
+  for (const data of cases) {
+    const result = analyzeStoryboard(data, { delivery: true });
+    assert.ok(Array.isArray(result.errors) && Array.isArray(result.warnings));
+    assert.ok(result.errors.length, JSON.stringify(data));
+  }
+});
+
+test('CLI prints warnings while the default successful exit code still depends only on errors', t => {
+  const result = runCli([temporaryJson(t, JSON.stringify(validStoryboard()))]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /警告.*project\.audio/);
+  assert.match(result.stdout, /校验通过/);
+});
+
+test('CLI strict mode fails on warnings and succeeds when every warning is addressed', t => {
+  const warned = runCli(['--strict', temporaryJson(t, JSON.stringify(validStoryboard()))]);
+  assert.equal(warned.status, 1);
+  assert.match(warned.stderr, /警告.*project\.audio/);
+  const clean = runCli([temporaryJson(t, JSON.stringify(deliveryStoryboard())), '--strict']);
+  assert.equal(clean.status, 0, clean.stderr);
+});
+
+test('CLI delivery mode fails incomplete rights and accepts transparent draft evidence', t => {
+  const incomplete = runCli(['--delivery', temporaryJson(t, JSON.stringify(validStoryboard()))]);
+  assert.equal(incomplete.status, 1);
+  assert.match(incomplete.stderr, /project\.audio\.license/);
+  const complete = runCli(['--delivery', temporaryJson(t, JSON.stringify(deliveryStoryboard()))]);
+  assert.equal(complete.status, 0, complete.stderr);
+});
+
+test('CLI rejects unknown options and still validates the number of paths', () => {
+  for (const args of [['--magic', 'one.json'], ['--strict'], ['--delivery', 'one.json', 'two.json']]) {
     const result = runCli(args);
     assert.equal(result.status, 1);
     assert.match(result.stderr, /用法|usage/i);
