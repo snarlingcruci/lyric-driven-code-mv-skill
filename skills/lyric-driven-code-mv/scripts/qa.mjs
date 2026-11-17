@@ -65,7 +65,7 @@ function preserveCleanupError(error, cleanupError) {
   }
 }
 
-export async function runDeterminismQA(renderFrame, { times, frameOptions = {}, warmupFrames = 0, teardown } = {}) {
+export async function runDeterminismQA(renderFrame, { times, frameOptions = {}, warmupFrames = 0, teardown, onWarning } = {}) {
   if (teardown !== undefined && typeof teardown !== 'function') throw new Error('teardown 必须为函数');
   let failed = false;
   let operationError;
@@ -75,14 +75,21 @@ export async function runDeterminismQA(renderFrame, { times, frameOptions = {}, 
       throw new Error('检查时间必须为 1–10000 个非负有限数');
     }
     if (![0, 2, 3].includes(warmupFrames)) throw new Error('warmupFrames 必须为 0、2 或 3；0 为禁用预热');
+    if (onWarning !== undefined && typeof onWarning !== 'function') throw new Error('onWarning 必须为函数');
     const ordered = [...new Set(times)].sort((a, b) => a - b);
     const baseline = new Map();
     const failures = [];
     const warmupHashes = new Map();
+    const warnings = [];
     let renderCount = 0;
     const renderHash = async time => {
       // 预热与正式检查使用同一 profile，立即哈希以兼容复用缓冲。
-      const hash = frameHash(await renderFrame(time, frameOptions));
+      const frame = await renderFrame(time, frameOptions);
+      const hash = frameHash(frame);
+      if (!warnings.length && frame.width * frame.height > 1e6) {
+        const warning = `RGBA帧为${frame.width}×${frame.height}，每帧${frame.data.length}字节；大量浏览器传输可能耗尽资源。优先检查低分辨率世界层，再单独检查正式分辨率的字幕/合成层；缩小尺寸的QA不能证明正式尺寸一致。`;
+        warnings.push(warning); onWarning?.(warning);
+      }
       renderCount++;
       return hash;
     };
@@ -116,7 +123,7 @@ export async function runDeterminismQA(renderFrame, { times, frameOptions = {}, 
       warmupMismatch, renderProfile: frameOptions,
       orders: orders.map(([name]) => name),
       frames: ordered.map(time => ({ time, sha256: baseline.get(time) })),
-      failures,
+      failures, warnings,
       limitation: '仅证明所抽样时间在本次渲染环境中的像素一致性；预热差异单独记录，不证明歌词对齐、授权或成片观感。'
     };
   } catch (error) {
@@ -164,7 +171,7 @@ async function main(args) {
     if (times.some(t => t >= duration)) throw new Error('检查时间必须位于 [0,duration)');
     const frameOptions = storyboard && module.frameOptionsForStoryboard ? await module.frameOptionsForStoryboard(storyboard) : {};
     // CLI 在整个操作结束后清理；不把 cleanup 再传给 runDeterminismQA。
-    const report = await runDeterminismQA(module.renderFrame, { times, frameOptions, warmupFrames: Number(opts['--warmup-frames'] ?? 3) });
+    const report = await runDeterminismQA(module.renderFrame, { times, frameOptions, warmupFrames: Number(opts['--warmup-frames'] ?? 3), onWarning: warning => console.error(`资源提示：${warning}`) });
     report.module = resolve(modulePath);
     report.duration = duration;
     report.fps = fps;
