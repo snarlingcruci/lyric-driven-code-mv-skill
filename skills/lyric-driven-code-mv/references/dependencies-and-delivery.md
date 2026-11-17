@@ -15,6 +15,19 @@ Canvas/SVG 是浏览器原生能力；已有浏览器不代表框架要求的版
 
 使用目标环境已有对应 skill：HTML 视频先读 hyperframes 路由，React 视频先读 remotion-best-practices，媒体检查可用 ffmpeg；这些个人 skill 缺失时沿用官方契约与已有工具，不要求整套安装。
 
+## 从已有模板看到画面
+
+无工程时从包内 [starter 说明](../assets/templates/starter/README.md) 开始，复制整个 `assets/templates/starter/` 后保留 `frame.mjs`、`timeline.mjs`、`png.mjs` 与预览/导出入口。以下在 skill 目录运行，用新目录保存自己的工程：
+
+```powershell
+New-Item -ItemType Directory -Path 'work' -Force | Out-Null
+Copy-Item -LiteralPath 'assets/templates/starter' -Destination 'work/my-mv' -Recurse
+node work/my-mv/export.mjs --help
+node work/my-mv/export.mjs --preview
+```
+
+预览地址由命令输出，静音查看首帧、跳播与转场。导出及单帧检查按 starter 当前说明执行；接歌曲时从自己的分镜 JSON 配置 `--storyboard`，音轨记录应描述实际使用的文件。已有工程沿用自己的渲染器与单帧入口，不为获得第一帧另建完整渲染系统。
+
 ## 渲染与恢复
 
 每帧由时间求值。HyperFrames 时间线可 seek；Remotion 用当前帧与固定种子；starter 的 `renderFrame(t)` 输出低分辨率 RGBA，Node zlib 编码 PNG，FFmpeg 整数放大后烧入高分辨率 ASS 字幕。`--storyboard` 统一项目参数、时点和音乐状态；仅 `illustrative` 且没有指定音频时合成原创演示节奏，其他状态使用真实音频。
@@ -67,6 +80,14 @@ node path/to/skill/scripts/qa.mjs frame.mjs --duration 12 --fps 30 --storyboard 
 ```
 
 确定性报告覆盖所选时间的四种求值顺序。默认低分辨率帧检查世界层；高分辨率字幕/后处理另做重复导出或在适配模块中合成后比较。它不能替代播放和音画核对。
+
+### 音画核对的正面方法
+
+把音频分析的能量包络、候选拍点/段落、镜头切点、动作峰值和字幕起止整理到同一根**成片秒**时间轴，可先用表格逐项记录。对声明踩拍的动作计算 `offsetMs=(event.at-nearestBeat)*1000`，对按乐句安排的切镜记录所对应的段落变化；这样能复核设计与候选数据是否一致，不能把候选强拍附近的比例称为实际听感通过。
+
+具备播放条件时，逐个循环播放关键点前后的小段，再连续播放相关范围。记录歌曲版本、源偏移、目标动作与实际听到的重音/乐句变化，以及修正前后的成片秒；演唱字幕另核对句起止和真实逐词点，器乐叙事字幕核对阅读时长及它与画面行动的关系。完成相应范围的人工核对后记录 `reviewer/reviewedAt`，在交付记录中写清范围。
+
+没有听觉通道时可交付上述结构比较、抽帧结果和具体 `pendingChecks`，保持 `draft`，把听感卡点列为未确认。检查去字幕叙事时先关闭字幕观看并记录能复述出的行动与结果；仅“字幕和画面相符”的抽帧结论不等于已做这项检查。
 
 具备条件时完整播放，核对歌曲版本、源偏移、动作落点、逐字填充、异常静音/削波与留白；不能播放/试听时如实写检查范围，将待核对区间和内容记录为 `music.pendingChecks` 后交付 `draft`。交付记录包含实际目标、所查帧/落点、技术参数、许可/署名、状态及未解决项，不能用“FFprobe 正常”声称整片语义与音乐同步已通过。
 

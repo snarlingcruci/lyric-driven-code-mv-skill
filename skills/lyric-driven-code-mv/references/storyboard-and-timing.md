@@ -14,6 +14,29 @@ const clipTime = annotatedSourceTime - sourceOffset;
 
 所有区间用 `[start,end)`。截断跨片段边界的歌词及事件，保留必要前置状态。让 `duration=durationFrames/fps`；最后一帧时间为 `(durationFrames-1)/fps`。嵌套场景的 `local=t-scene.start`，Remotion Sequence 内的帧已是局部帧，不能再减场景起点。
 
+## 渲染函数收到什么时间
+
+**在每个渲染入口写明时间含义，并在适配边界转换一次。** 分镜保留成片秒；场景画法可以使用成片秒或镜头局部秒，关键是动作参数与函数入参使用同一坐标。
+
+| 入口或数据 | 时间含义 |
+|---|---|
+| `renderFrame(clipT)`、JSON 的句起止、`event.at` | 从成片第 0 秒起算 |
+| `renderTimelineFrame` 的 `drawScene(index, localT, options)` | `localT=clipT-scene.start`，当前镜从 0 起算 |
+| 原曲注释与音轨截取 | `sourceT=sourceOffset+clipT`，仅在音频入口换算 |
+
+例如镜头 `[16.8,46.2)`：成片第 30 秒是 `localT=13.2`；JSON 事件 `at=33` 转为该镜动作点 `eventLocal=16.2`。按成片秒写的 `ramp(t,33,34.4)` 不能直接接收 `localT`。沿用这种旧画法时，可在 `drawScene` 的适配边界恢复成片秒：
+
+```js
+const drawScene = (index, localT, options) => {
+  const scene = options.timeline.scenes[index];
+  return drawUsingClipTime(scene.start + localT, scene, options);
+};
+```
+
+下一镜预卷的 `localT=0` 恢复为**下一镜的 `scene.start`**，不是转场当下的成片时间。反过来，纯局部画法把 JSON 事件转换为 `event.at-scene.start`，之后不再减镜头起点。
+
+starter 还包含一层演出缩放：JSON 路线在调用 `SCENE_RENDERERS[scene.id]` 前使用 `designT=localT*6/(scene.end-scene.start)`，使内置 `send/receive` 的 6 秒演出适配实际镜长。当前注册画法收到的是这套设计秒；新增画法应声明并适配这个约定。需要直接使用真实 `localT` 的工程可在 `renderTimelineFrame` 的 `drawScene` 层接入自己的画法。不要把设计秒误当成片秒或真实镜头秒。
+
 ## 从含义到事件
 
 先写一句“人物想要什么，因什么受阻或改变”，再设计可见演出。
@@ -27,6 +50,14 @@ const clipTime = annotatedSourceTime - sourceOffset;
 | 重新联系 | 两地相望，光锥跨屏，同步举灯 | 连线完成后才共同动作 |
 
 让动作准备稍早开始，峰值对准需要强调的音乐点。缓慢观察、句尾停留和间奏可以继续推进地点、记忆与关系。第一次送纸船失败，第二次揭示另一岸也在等待，可增加信息且保留遗憾；副歌不必全部变成成功。
+
+## 器乐与原创叙事字幕
+
+纯器乐可以配原创叙事字幕。继续用 `lyrics[]` 保存句子、起止与镜头引用，在项目说明或 `note` 里写明“原创叙事字幕，音轨无人声演唱”及文案作者；这不增加必填 schema 字段。文字由故事设计，不称为歌曲中已演唱的歌词。允许整句显示并按阅读需要留时，也可在动作前预示或动作后回应，不套用演唱逐词跟唱规则。
+
+先识别能说明段落变化的音乐结构、音色或和声变化，再为需要强调的动作选择落点；能量拐点与拍点都是候选证据。切镜可以随乐句、留白或叙事结果发生，只对明确声明 `sync:"beat"` 的事件检查踩拍，不要求每镜事件、HUD 负反馈或每个切点都在强拍上。
+
+器乐不自动限定为 `draft`：只有机器分析或尚未试听时保持 `draft`，方法、限制与 `pendingChecks` 写明待确认的乐句边界、节拍相位或动作峰值；人工听辨并核对相关片段后，可以按实际范围记录 `verified`。核对对象是配乐结构、动作与叙事字幕的阅读时序，无人声时不宣称逐词演唱对齐。自编时点的演示仍用 `illustrative`。
 
 ## JSON 约定
 
