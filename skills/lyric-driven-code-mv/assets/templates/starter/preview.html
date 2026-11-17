@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>未抵达的灯 · 像素 MV 模板</title>
+<style>
+  :root{color-scheme:dark;font-family:"Microsoft YaHei",system-ui,sans-serif;background:#131e33;color:#e9e4cb}
+  body{max-width:1100px;margin:30px auto;padding:0 20px}h1{font-size:24px;font-weight:600;margin-bottom:8px}p{color:#bacbd0;font-size:14px;line-height:1.8}
+  canvas{display:block;width:100%;aspect-ratio:16/9;background:#131e33;border:1px solid #455a65;image-rendering:pixelated}
+  .controls{display:flex;gap:14px;align-items:center;margin:18px 0;flex-wrap:wrap}input[type=range]{flex:1;min-width:150px;accent-color:#ffce6e}button{border:1px solid #6a858a;background:#203c4d;color:#f4ead0;padding:9px 17px;border-radius:5px;cursor:pointer}output{font-variant-numeric:tabular-nums;min-width:100px}
+  .jumps button{padding:6px 12px}label{font-size:13px;color:#bed0d3}.note{font-size:12px}
+</style>
+<h1>未抵达的灯</h1>
+<p>原创 12 秒演示：纸船载灯向对岸漂去，被弯流推回河心；人物以岸灯回应。预览为静音；导出包含代码合成节奏，不对应真实歌曲或歌词时间。</p>
+<canvas id="view" width="1920" height="1080" aria-label="纸船两岸像素场景"></canvas>
+<div class="controls"><button id="play">播放</button><input id="seek" aria-label="时间" type="range" min="0" max="12" value="0" step="0.01"><output id="time">0.00 / 12秒</output><label><input id="safe" type="checkbox"> 显示字幕安全区</label></div>
+<div class="controls jumps"><span>抽帧查看：</span><button data-t="1.4">推船</button><button data-t="5.1">转场开始</button><button data-t="5.55">转场中点</button><button data-t="6">镜头边界</button><button data-t="9.8">受阻回应</button><button data-t="11.9">最终状态</button></div>
+<p class="note" id="state"></p>
+<p class="note">场景与导出共享 <code>frame.mjs → renderFrame(t)</code>。字幕在 1920×1080 的独立层绘制；浏览器和 ffmpeg 使用本机系统字体，字形与间距可能不同。模板不下载字体，最终字幕以导出文件为准。</p>
+<script type="module">
+import { renderFrame, resolveTimeline, CAPTIONS } from './frame.mjs';
+const view = document.getElementById('view'), ctx = view.getContext('2d');
+const pixels = document.createElement('canvas'); pixels.width = 384; pixels.height = 216;
+const px = pixels.getContext('2d'), seek = document.getElementById('seek'), time = document.getElementById('time'), play = document.getElementById('play'), safe = document.getElementById('safe');
+let playing = false, startClock = 0, current = 0;
+function draw(t) {
+  const frame = renderFrame(t); px.putImageData(new ImageData(frame.data, frame.width, frame.height), 0, 0);
+  ctx.imageSmoothingEnabled = false; ctx.drawImage(pixels, 0, 0, view.width, view.height);
+  const cue = CAPTIONS.find(c => t >= c.start && t < c.end);
+  if (cue) {
+    ctx.font = '44px "Microsoft YaHei",system-ui,sans-serif'; const zhWidth = ctx.measureText(cue.zh).width;
+    ctx.font = '31px "Microsoft YaHei",system-ui,sans-serif'; const enWidth = ctx.measureText(cue.en).width;
+    const width = Math.min(1640, Math.max(zhWidth, enWidth) + 48);
+    ctx.fillStyle = 'rgba(19,27,41,.86)'; ctx.fillRect((1920-width)/2, 900, width, 105);
+    ctx.textAlign = 'center'; ctx.fillStyle = '#edf5f4'; ctx.font = '44px "Microsoft YaHei",system-ui,sans-serif'; ctx.fillText(cue.zh, 960, 947);
+    ctx.font = '31px "Microsoft YaHei",system-ui,sans-serif'; ctx.fillText(cue.en, 960, 989);
+  }
+  if (t < 2.2) { ctx.fillStyle='rgba(19,27,41,.86)'; ctx.fillRect(673,55,574,49); ctx.fillStyle='#e5dec4'; ctx.textAlign='center'; ctx.font='27px "Microsoft YaHei",system-ui,sans-serif'; ctx.fillText('演示时点 · 原创合成节奏',960,90); }
+  if (safe.checked) { ctx.strokeStyle='#d8b876'; ctx.lineWidth=2; ctx.strokeRect(153.6,64.8,1612.8,939.6); }
+  const s = resolveTimeline(t); document.getElementById('state').textContent = `镜头 ${s.index+1} · 当前镜头 ${s.local.toFixed(2)} 秒${s.nextIndex===null?'':` · 转场 ${(s.progress*100).toFixed(0)}% · 下一镜预卷固定0秒`}`;
+  seek.value=t; time.value=`${t.toFixed(2)} / 12秒`;
+}
+function pause(){playing=false;play.textContent='播放';}
+play.addEventListener('click',()=>{if(playing){pause();return;}if(current>=12)current=0;startClock=performance.now()-current*1000;playing=true;play.textContent='暂停';});
+seek.addEventListener('input',()=>{current=Number(seek.value);if(playing)startClock=performance.now()-current*1000;draw(current);});
+safe.addEventListener('change',()=>draw(current));
+document.querySelectorAll('[data-t]').forEach(button=>button.addEventListener('click',()=>{pause();current=Number(button.dataset.t);draw(current);}));
+function tick(now){if(playing){current=Math.min(12,(now-startClock)/1000);draw(current);if(current>=12)pause();}requestAnimationFrame(tick);}
+draw(0);requestAnimationFrame(tick);
+</script>
+</html>
