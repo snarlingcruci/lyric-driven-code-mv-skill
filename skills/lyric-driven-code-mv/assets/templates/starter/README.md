@@ -4,7 +4,7 @@
 
 不需要 npm 包、API Key、账号、外部服务或下载字体。需要本机已有 Node.js、ffmpeg（含 libx264、AAC、libass）和 ffprobe。模板不会安装软件。现有 HyperFrames、Remotion、Canvas 或其他框架工程应沿用原工程；通过纯帧接口适配所需能力，不强制替换框架。
 
-目录是扁平结构，方便网页上传或复制：`frame.mjs` 共享纯帧、`png.mjs` 内置 PNG 编码、`export.mjs` 导出与本地预览、`preview.html` 浏览器预览、此说明。不要把生成的 MP4、WAV 或 PNG 上传到 skill 仓库。
+目录是扁平结构，方便网页上传或复制：`frame.mjs` 共享纯帧、`timeline.mjs` 加载与适配分镜、`png.mjs` 内置 PNG 编码、`export.mjs` 导出与本地预览、`preview.html` 浏览器预览、此说明。不要把生成的 MP4、WAV 或 PNG 上传到 skill 仓库。
 
 ## 运行
 
