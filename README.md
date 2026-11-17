@@ -83,6 +83,8 @@
 - **离线音频分析**：使用 Node 内置模块与 FFmpeg，输出能量、停顿、起音和 BPM/相位候选；支持输入已知 BPM、合并邻近候选，并明确标识低置信网格。
 - **分镜校验**：检查时间范围、镜头覆盖和角色/道具引用，并提示跨镜歌词、显式踩拍、HUD 支撑与授权记录缺项。
 - **确定性 QA**：预热后重复、逆序和乱序求值同一批帧，单独记录首次光栅差异；适配器可提供清理钩子，让浏览器等资源在检查后正常退出。
+- **同步候选图**：把能量、候选拍点、镜头边界和字幕区间放在同一时间轴，输出SVG与JSON并报告起点误差，帮助定位需要试听核对的位置。
+- **音轨追踪与单帧检查**：音频重定位核对同一素材，导出保存实际音轨哈希与署名记录；可先导出某个时点的世界层PNG，再检查正式成片字幕。
 - **两种导出方式**：管道直出适合快速验证；PNG 落盘与恢复适合保留渲染进度。
 - **画面验收**：通过接触表查看整体叙事，再检查每镜和转场的关键帧。
 
@@ -128,8 +130,11 @@ node skills/lyric-driven-code-mv/scripts/qa.mjs work/my-mv/frame.mjs --storyboar
 ```powershell
 node skills/lyric-driven-code-mv/scripts/analyze-audio.mjs 'path/to/song.wav' --start 37.2 --duration 12 --out work/analysis.json
 node skills/lyric-driven-code-mv/scripts/analyze-audio.mjs 'path/to/song.wav' --start 37.2 --duration 12 --bpm 110 --out work/known-bpm.json
+node skills/lyric-driven-code-mv/scripts/visualize-sync.mjs work/storyboard.json work/analysis.json --out work/sync-review.svg
 node skills/lyric-driven-code-mv/scripts/validate-storyboard.mjs skills/lyric-driven-code-mv/assets/storyboard-example.json --delivery
 node --test
 ```
 
 测试可使用 `FFMPEG_PATH` / `FFPROBE_PATH` 指向已有程序；PATH 中缺少工具时只跳过需要实际解码/编码的用例，并说明原因。显式配置无效路径会报错。`--strict` 把结构警告升级为失败，通过它仍需核听；草稿交付须附 `music.pendingChecks` 具体时间区间与检查内容。使用说明见 [SKILL.md](skills/lyric-driven-code-mv/SKILL.md)、[时间与分镜](skills/lyric-driven-code-mv/references/storyboard-and-timing.md)、[像素/字幕](skills/lyric-driven-code-mv/references/pixel-game-visuals.md)、[音频/授权](skills/lyric-driven-code-mv/references/audio-and-rights.md)、[依赖/验收](skills/lyric-driven-code-mv/references/dependencies-and-delivery.md)。
+
+长期维护、复现反馈、兼容性、发布与回退流程见 [维护指南](MAINTENANCE.md)。同步图的误差解释与器乐叙事字幕说明见 [同步复核](skills/lyric-driven-code-mv/references/sync-review.md)。
