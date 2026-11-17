@@ -6,6 +6,7 @@ import { inflateSync } from 'node:zlib';
 import { join, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { requireMediaTools } from './media-tools.mjs';
 
 const base = new URL('../skills/lyric-driven-code-mv/assets/templates/starter/', import.meta.url);
 
@@ -125,13 +126,13 @@ test('导出CLI校验配置，并给出易读的失败退出码', async () => {
 });
 
 test('实际编码后的输出路径错误返回失败，清理临时MP4和音轨目录', t => {
-  if (spawnSync('ffmpeg', ['-version'], { windowsHide: true }).status !== 0 || spawnSync('ffprobe', ['-version'], { windowsHide: true }).status !== 0) { t.skip('需要本机已有 ffmpeg/ffprobe'); return; }
+  const tools = requireMediaTools(t, ['ffmpeg', 'ffprobe']); if (!tools) return;
   const root = resolve(process.cwd(), '..', 'starter-check'); mkdirSync(root, { recursive: true });
   const directory = mkdtempSync(join(root, 'export-failure-test-')), target = join(directory, 'cannot-replace-directory.mp4');
   mkdirSync(target);
   t.after(() => { assert.ok(resolve(directory).startsWith(root + sep)); rmSync(directory, { recursive: true, force: true }); });
   const cli = fileURLToPath(new URL('export.mjs', base));
-  const result = spawnSync(process.execPath, [cli, '--out', target, '--width', '640', '--height', '360', '--fps', '1'], { encoding: 'utf8', timeout: 15000, windowsHide: true });
+  const result = spawnSync(process.execPath, [cli, '--out', target, '--width', '640', '--height', '360', '--fps', '1', '--ffmpeg', tools.ffmpeg, '--ffprobe', tools.ffprobe], { encoding: 'utf8', timeout: 15000, windowsHide: true });
   assert.equal(result.error, undefined); assert.equal(result.status, 1); assert.match(result.stderr, /导出失败/);
   assert.ok(existsSync(target)); assert.deepEqual(readdirSync(directory), ['cannot-replace-directory.mp4']);
 });

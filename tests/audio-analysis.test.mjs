@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { mediaToolPath, requireMediaTools } from './media-tools.mjs';
 
 const script = fileURLToPath(new URL('../skills/lyric-driven-code-mv/scripts/analyze-audio.mjs', import.meta.url));
 const { analyzePcm, decodeAudio, parseArgs } = await import(new URL('../skills/lyric-driven-code-mv/scripts/analyze-audio.mjs', import.meta.url));
@@ -17,6 +18,21 @@ function pulses(duration = 8, phase = 0.17, period = 0.5, amplitude = 0.8) {
     for (let offset = 0; offset < 0.04 * sampleRate; offset++) {
       const index = Math.round(start * sampleRate) + offset;
       if (index < samples.length) samples[index] = amplitude * Math.exp(-offset / (0.012 * sampleRate)) * Math.cos(2 * Math.PI * 600 * offset / sampleRate);
+    }
+  }
+  return samples;
+}
+
+// 80 ms of timing spread represents loose playing; the intended beat remains 110 BPM.
+function loose110(duration = 80, jitter = 0.08) {
+  const samples = new Float32Array(Math.round(duration * sampleRate));
+  let state = 12;
+  for (let beat = 0; 0.17 + beat * 60 / 110 < duration; beat++) {
+    state = (state * 1664525 + 1013904223) >>> 0;
+    const start = 0.17 + beat * 60 / 110 + (state / 4294967296 - 0.5) * jitter;
+    for (let offset = 0; offset < 0.04 * sampleRate; offset++) {
+      const index = Math.round(start * sampleRate) + offset;
+      if (index >= 0 && index < samples.length) samples[index] = 0.8 * Math.exp(-offset / (0.012 * sampleRate)) * Math.cos(2 * Math.PI * 600 * offset / sampleRate);
     }
   }
   return samples;
@@ -83,6 +99,84 @@ test('120 BPM pulses retain their 0.17-second phase instead of forcing a grid to
   assert.ok(report.tempo.ambiguities.some(candidate => candidate.relation === 'half' && Math.abs(candidate.bpm - 60) < 1));
 });
 
+test('known 110 BPM fits phase without replacing the provided tempo or claiming verification', () => {
+  const report = analyzePcm(loose110(20), { sampleRate, bpm: 110 });
+  assert.equal(report.tempo.bpm, 110);
+  assert.equal(report.tempo.source, 'user-provided');
+  assert.equal(report.status, 'draft');
+  assert.ok(Math.abs(report.tempo.phaseSeconds - 0.17) < 0.035, JSON.stringify(report.tempo));
+  assert.match(report.tempo.evidence.method, /相位/);
+  assert.match(report.tempo.evidence.bpm, /110/);
+  assert.ok(report.beats.length >= 35);
+  assert.ok(report.beats.every(at => at >= 0 && at < 20));
+  assert.ok(Math.abs(report.beats[1] - report.beats[0] - 60 / 110) < 0.000002);
+});
+
+test('a provided 110 BPM can fit phase from every other beat without requiring a detectable intervening beat', () => {
+  const report = analyzePcm(pulses(20, 0.17, 120 / 110), { sampleRate, bpm: 110 });
+  assert.equal(report.tempo.bpm, 110);
+  assert.equal(report.tempo.source, 'user-provided');
+  assert.ok(Math.abs(report.tempo.phaseSeconds - 0.17) < 0.025);
+  assert.ok(report.beats.length >= 35);
+});
+
+test('metadata BPM requires an explicit evidence record and is preserved in the report', () => {
+  const evidence = 'https://example.org/tracks/folk-song — 110 BPM';
+  const options = parseArgs(['song.wav', '--bpm', '110', '--bpm-source', 'metadata', '--bpm-evidence', evidence]);
+  const report = analyzePcm(loose110(20), options);
+  assert.equal(report.tempo.source, 'metadata');
+  assert.equal(report.tempo.evidence.bpm, evidence);
+  assert.throws(() => analyzePcm(loose110(8), { bpm: 110, bpmSource: 'metadata' }), /依据|evidence/);
+  for (const args of [['song.wav', '--bpm', 'NaN'], ['song.wav', '--bpm', '0'], ['song.wav', '--bpm', '401'], ['song.wav', '--bpm-source', 'metadata'], ['song.wav', '--bpm', '110', '--bpm-source', 'detected']]) {
+    assert.throws(() => parseArgs(args), /BPM|bpm|来源|source/);
+  }
+});
+
+test('neighboring 109 and 111 candidates form one cluster and produce a draft grid for loose playing', () => {
+  const report = analyzePcm(loose110(), { sampleRate });
+  assert.ok(Math.abs(report.tempo.bpm - 110) <= 1, JSON.stringify(report.tempo));
+  assert.equal(report.tempo.status, 'low-confidence');
+  assert.equal(report.tempo.source, 'audio-analysis');
+  assert.ok(report.tempo.confidence > 0 && report.tempo.confidence < 0.6);
+  const cluster = report.tempo.clusters.find(candidate => candidate.members.some(member => member.bpm === 109) && candidate.members.some(member => member.bpm === 111));
+  assert.ok(cluster, JSON.stringify(report.tempo.clusters));
+  assert.ok(cluster.range.min <= 109 && cluster.range.max >= 111);
+  assert.ok(report.beats.length > 130);
+  assert.equal(report.status, 'draft');
+});
+
+test('long exact 110 BPM pulses are not rejected because a half-time bin ranks first', () => {
+  const report = analyzePcm(loose110(80, 0), { sampleRate });
+  assert.ok(Math.abs(report.tempo.bpm - 110) < 0.3, JSON.stringify(report.tempo));
+  assert.ok(Math.abs(report.tempo.phaseSeconds - 0.17) < 0.025);
+});
+
+test('white noise and randomly spaced impulses retain no automatic or provided candidate grid', () => {
+  for (const kind of ['white', 'impulses']) {
+    let state = 12;
+    const random = () => { state = (state * 1664525 + 1013904223) >>> 0; return state / 4294967296; };
+    const samples = new Float32Array(80 * sampleRate);
+    if (kind === 'white') {
+      for (let i = 0; i < samples.length; i++) samples[i] = 0.8 * (2 * random() - 1);
+    } else {
+      for (let start = 0.1; start < 80; start += 0.15 + random() * 0.7) {
+        for (let offset = 0; offset < 0.04 * sampleRate; offset++) {
+          const index = Math.round(start * sampleRate) + offset;
+          if (index < samples.length) samples[index] = 0.8 * Math.exp(-offset / (0.012 * sampleRate)) * Math.cos(2 * Math.PI * 600 * offset / sampleRate);
+        }
+      }
+    }
+    for (const options of [{ sampleRate }, { sampleRate, bpm: 110 }]) {
+      const report = analyzePcm(samples, options);
+      assert.equal(report.tempo.bpm, null, `${kind}: ${JSON.stringify(report.tempo)}`);
+      assert.deepEqual(report.beats, []);
+    }
+  }
+  const silent = analyzePcm(new Float32Array(8 * sampleRate), { bpm: 110 });
+  assert.equal(silent.tempo.bpm, null);
+  assert.deepEqual(silent.beats, []);
+});
+
 test('a quiet pulse train below the absolute evidence floor leaves tempo unselected', () => {
   const report = analyzePcm(pulses(8, 0.17, 0.5, 1e-7), { sampleRate });
   assert.equal(report.tempo.bpm, null);
@@ -140,18 +234,19 @@ test('invalid PCM and analysis options fail clearly before numerical work', () =
 });
 
 test('CLI parser rejects duplicate, unknown, missing, nonfinite, and overlong options', () => {
-  assert.deepEqual(parseArgs(['song.wav', '--start', '37.2', '--duration', '12', '--out', 'report.json']), { input: 'song.wav', start: 37.2, duration: 12, out: 'report.json', sampleRate: 8000, ffmpegPath: 'ffmpeg' });
+  assert.deepEqual(parseArgs(['song.wav', '--start', '37.2', '--duration', '12', '--out', 'report.json']), { input: 'song.wav', start: 37.2, duration: 12, out: 'report.json', sampleRate: 8000, ffmpegPath: process.env.FFMPEG_PATH ?? 'ffmpeg' });
   for (const args of [[], ['a', 'b'], ['a', '--start'], ['a', '--start', '-1'], ['a', '--start', 'NaN'], ['a', '--duration', '0'], ['a', '--duration', '601'], ['a', '--start', '0', '--start', '1'], ['a', '--unknown'], ['a', '--sample-rate', '44100']]) {
     assert.throws(() => parseArgs(args), /用法|参数|start|duration|sample-rate|重复|未知/);
   }
 });
 
 test('real ffmpeg CLI handles spaces in paths and emits clip timing after an actual nonzero cut', t => {
+  const tools = requireMediaTools(t); if (!tools) return;
   const directory = tempDirectory(t);
   const input = join(directory, 'source pulse song.wav');
   const out = join(directory, 'report with spaces.json');
   writeFileSync(input, wav(pulses(10, 0.37)));
-  const result = runCli([input, '--start', '2.2', '--duration', '6', '--out', out]);
+  const result = runCli([input, '--start', '2.2', '--duration', '6', '--out', out, '--ffmpeg', tools.ffmpeg]);
   assert.equal(result.status, 0, result.stderr);
   const report = JSON.parse(readFileSync(out, 'utf8'));
   assert.equal(report.sourceOffset, 2.2);
@@ -161,11 +256,29 @@ test('real ffmpeg CLI handles spaces in paths and emits clip timing after an act
   assert.ok(Math.abs(report.tempo.phaseSeconds - 0.17) <= 0.025);
 });
 
+test('real CLI fits a metadata grid on the cut clock and an explicit flag overrides FFMPEG_PATH', t => {
+  const tools = requireMediaTools(t); if (!tools) return;
+  const directory = tempDirectory(t);
+  const input = join(directory, 'loose playing.wav');
+  writeFileSync(input, wav(loose110(10)));
+  const evidence = 'https://example.org/track — page says 110 BPM';
+  const result = spawnSync(process.execPath, [script, input, '--start', '2.2', '--duration', '6', '--bpm', '110', '--bpm-source', 'metadata', '--bpm-evidence', evidence, '--ffmpeg', tools.ffmpeg], { encoding: 'utf8', timeout: 20000, maxBuffer: 8 * 1024 * 1024, windowsHide: true, env: { ...process.env, FFMPEG_PATH: join(directory, 'wrong default ffmpeg') } });
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.tempo.bpm, 110);
+  assert.equal(report.tempo.source, 'metadata');
+  assert.equal(report.tempo.evidence.bpm, evidence);
+  assert.equal(report.sourceOffset, 2.2);
+  assert.ok(Math.abs(report.tempo.phaseSeconds - 0.151818) < 0.035);
+  assert.ok(report.beats.every(at => at >= 0 && at < 6));
+});
+
 test('decoder byte cap stops ffmpeg and rejects rather than analyzing a silently truncated source', async t => {
+  const tools = requireMediaTools(t); if (!tools) return;
   const directory = tempDirectory(t);
   const input = join(directory, 'larger than allowed.wav');
   writeFileSync(input, wav(pulses(2)));
-  await assert.rejects(decodeAudio(input, { sampleRate, maxPcmBytes: sampleRate * 4 }), /上限|limit|截取/);
+  await assert.rejects(decodeAudio(input, { sampleRate, maxPcmBytes: sampleRate * 4, ffmpegPath: tools.ffmpeg }), /上限|limit|截取/);
 });
 
 test('decoder rejects a nonexistent ffmpeg executable with an actionable error', async t => {
@@ -175,16 +288,31 @@ test('decoder rejects a nonexistent ffmpeg executable with an actionable error',
   await assert.rejects(decodeAudio(input, { sampleRate, ffmpegPath: join(directory, 'missing ffmpeg executable') }), /ffmpeg/);
 });
 
-test('CLI reports missing inputs and malformed audio without a JavaScript stack', t => {
+test('CLI honors an explicit FFMPEG_PATH instead of silently using a PATH executable', t => {
+  const directory = tempDirectory(t);
+  const input = join(directory, 'valid.wav');
+  writeFileSync(input, wav(pulses(1)));
+  const result = spawnSync(process.execPath, [script, input], { encoding: 'utf8', timeout: 20000, windowsHide: true, env: { ...process.env, FFMPEG_PATH: join(directory, 'missing ffmpeg executable') } });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /ffmpeg/);
+});
+
+test('CLI reports missing inputs without a JavaScript stack even before decoding', t => {
+  const result = runCli([join(tempDirectory(t), 'not found.wav'), '--duration', '2']);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /读取|音频/);
+  assert.doesNotMatch(result.stderr, /\n\s+at /);
+});
+
+test('CLI reports malformed audio without a JavaScript stack after actual decoding', t => {
+  const tools = requireMediaTools(t); if (!tools) return;
   const directory = tempDirectory(t);
   const malformed = join(directory, 'bad audio.wav');
   writeFileSync(malformed, 'this is not audio');
-  for (const input of [join(directory, 'not found.wav'), malformed]) {
-    const result = runCli([input, '--duration', '2']);
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /读取|音频|ffmpeg/);
-    assert.doesNotMatch(result.stderr, /\n\s+at /);
-  }
+  const result = runCli([malformed, '--duration', '2', '--ffmpeg', tools.ffmpeg]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /音频|ffmpeg/);
+  assert.doesNotMatch(result.stderr, /\n\s+at /);
 });
 
 test('CLI refuses an output that would overwrite its source audio', t => {
@@ -205,10 +333,11 @@ test('CLI help explains draft status and bounded memory without decoding anythin
 });
 
 test('CLI without --out emits parseable JSON on stdout and draft status for a silent clip', t => {
+  const tools = requireMediaTools(t); if (!tools) return;
   const directory = tempDirectory(t);
   const input = join(directory, 'quiet source.wav');
   writeFileSync(input, wav(new Float32Array(sampleRate)));
-  const result = runCli([input]);
+  const result = runCli([input, '--ffmpeg', tools.ffmpeg]);
   assert.equal(result.status, 0, result.stderr);
   const report = JSON.parse(result.stdout);
   assert.equal(report.status, 'draft');
@@ -216,11 +345,27 @@ test('CLI without --out emits parseable JSON on stdout and draft status for a si
 });
 
 test('CLI rejects a cut beyond EOF instead of emitting an empty tempo report', t => {
+  const tools = requireMediaTools(t); if (!tools) return;
   const directory = tempDirectory(t);
   const input = join(directory, 'one second source.wav');
   writeFileSync(input, wav(pulses(1)));
-  const result = runCli([input, '--start', '10', '--duration', '2']);
+  const result = runCli([input, '--start', '10', '--duration', '2', '--ffmpeg', tools.ffmpeg]);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /PCM|起点/);
   assert.equal(result.stdout, '');
+});
+
+test('media probes skip missing default tools with a reason and reject explicit bad paths', t => {
+  const directory = tempDirectory(t);
+  const missing = join(directory, 'missing media tool');
+  assert.equal(mediaToolPath('ffmpeg', { FFMPEG_PATH: missing }), missing);
+  assert.throws(() => requireMediaTools(t, ['ffmpeg'], { ...process.env, FFMPEG_PATH: missing }), /FFMPEG_PATH.*不可用/);
+  assert.throws(() => requireMediaTools(t, ['ffprobe'], { ...process.env, FFPROBE_PATH: missing }), /FFPROBE_PATH.*不可用/);
+  assert.throws(() => mediaToolPath('ffmpeg', { FFMPEG_PATH: '' }), /FFMPEG_PATH/);
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !['PATH', 'FFMPEG_PATH', 'FFPROBE_PATH'].includes(name.toUpperCase())));
+  env.PATH = directory;
+  let reason;
+  const tools = requireMediaTools({ skip: value => { reason = value; } }, ['ffmpeg'], env);
+  assert.equal(tools, null);
+  assert.match(reason, /ffmpeg.*PATH.*不可用/);
 });

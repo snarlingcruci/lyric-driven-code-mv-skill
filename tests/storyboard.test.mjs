@@ -228,6 +228,7 @@ function deliveryStoryboard() {
     use: 'Include the audio in this music video and publish it with attribution',
   });
   data.music.evidence = { method: 'Listen and align marked attacks', limitations: 'Tempo can drift between the manually checked attacks' };
+  data.music.pendingChecks = [{ start: 1, end: 3, check: '核对第一句起止与举礼物动作的峰值是否对应演唱重音' }];
   return data;
 }
 
@@ -529,6 +530,87 @@ test('draft music can be delivered with a transparent method and limitations wit
   }
 });
 
+test('ordinary draft validation keeps legacy evidence compatible without a pending-check list', () => {
+  const data = deliveryStoryboard();
+  delete data.music.pendingChecks;
+  const result = analyzeStoryboard(data);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.warnings, []);
+  assert.deepEqual(validateStoryboard(data), []);
+});
+
+test('draft delivery requires a nonempty pending-check list with inspectable clip intervals', () => {
+  for (const pendingChecks of [undefined, []]) {
+    const data = deliveryStoryboard();
+    if (pendingChecks === undefined) delete data.music.pendingChecks;
+    else data.music.pendingChecks = pendingChecks;
+    assert.ok(analyzeStoryboard(data, { delivery: true }).errors.some(message => /^music\.pendingChecks:/.test(message)));
+    assert.deepEqual(analyzeStoryboard(data).errors, []);
+  }
+  const data = deliveryStoryboard();
+  assert.deepEqual(analyzeStoryboard(data, { delivery: true }).errors, []);
+  data.music.pendingChecks = [{ start: 0, end: 12, check: '完整试听以确认句起止、节拍相位和关键动作落点；目前只有机器推定' }];
+  assert.deepEqual(analyzeStoryboard(data, { delivery: true }).errors, []);
+});
+
+const invalidPendingCheckCases = [
+  ['a pending-check list represented as text', '核对第一句', /music\.pendingChecks:/],
+  ['a null pending-check list', null, /music\.pendingChecks:/],
+  ['a null pending-check entry', [null], /music\.pendingChecks\[0\]:/],
+  ['a pending-check interval before the clip', [{ start: -1, end: 2, check: '核对第一句起点' }], /\.start:/],
+  ['a pending-check interval after the clip', [{ start: 1, end: 13, check: '核对末句结束位置' }], /\.end:/],
+  ['a source-time pending-check interval', [{ start: 121, end: 123, check: '核对第一句起止' }], /\.end:/],
+  ['a reversed pending-check interval', [{ start: 3, end: 1, check: '核对第一句起止' }], /music\.pendingChecks\[0\]:/],
+  ['a zero-length pending-check interval', [{ start: 1, end: 1, check: '核对第一句起点' }], /music\.pendingChecks\[0\]:/],
+  ['a numeric-string pending-check interval', [{ start: '1', end: 3, check: '核对第一句起止' }], /\.start:/],
+  ['a nonfinite pending-check interval', [{ start: 1, end: Infinity, check: '核对第一句起止' }], /\.end:/],
+  ['a missing description of the unconfirmed check', [{ start: 1, end: 3 }], /\.check:/],
+  ['a blank description of the unconfirmed check', [{ start: 1, end: 3, check: ' ' }], /\.check:/],
+  ['a nontext description of the unconfirmed check', [{ start: 1, end: 3, check: {} }], /\.check:/],
+];
+
+for (const [name, pendingChecks, expected] of invalidPendingCheckCases) {
+  test(`rejects ${name} in both ordinary and delivery validation`, () => {
+    const data = deliveryStoryboard();
+    data.music.pendingChecks = pendingChecks;
+    for (const options of [{}, { delivery: true }]) {
+      const result = analyzeStoryboard(data, options);
+      assert.ok(result.errors.some(message => message.startsWith('music.pendingChecks') && expected.test(message)), JSON.stringify(result.errors));
+    }
+  });
+}
+
+test('pending-check descriptions reject pure placeholders while accepting concrete unconfirmed content', () => {
+  for (const check of ['待核对', ' 待确认。 ', '未核对', '没核对', 'pending', ' UNKNOWN! ', 'tbd']) {
+    const data = deliveryStoryboard();
+    data.music.pendingChecks[0].check = check;
+    assert.ok(analyzeStoryboard(data, { delivery: true }).errors.some(message => /^music\.pendingChecks\[0\]\.check:/.test(message)), check);
+  }
+  const data = deliveryStoryboard();
+  data.music.pendingChecks[0].check = '待核对第一句的尾音是否应在转场开始前结束';
+  assert.deepEqual(analyzeStoryboard(data, { delivery: true }).errors, []);
+});
+
+test('a sparse pending-check list produces diagnostics rather than silently satisfying draft delivery', () => {
+  const data = deliveryStoryboard();
+  data.music.pendingChecks = new Array(1);
+  assert.ok(analyzeStoryboard(data, { delivery: true }).errors.some(message => /^music\.pendingChecks\[0\]:/.test(message)));
+});
+
+test('non-draft delivery does not require pending checks, and publication use activates draft delivery requirements', () => {
+  const data = deliveryStoryboard();
+  delete data.music.pendingChecks;
+  data.music.status = 'illustrative';
+  data.music.presentationNotice = true;
+  assert.deepEqual(analyzeStoryboard(data, { delivery: true }).errors, []);
+  data.music.status = 'verified';
+  Object.assign(data.music.evidence, { reviewer: 'Human listener', reviewedAt: '2026-11-17T08:00:00Z' });
+  assert.deepEqual(analyzeStoryboard(data, { delivery: true }).errors, []);
+  data.music.status = 'draft';
+  data.project.audio.use = 'publish';
+  assert.ok(analyzeStoryboard(data).errors.some(message => /^music\.pendingChecks:/.test(message)));
+});
+
 test('malformed optional records and invalid timing inputs never crash analyzer diagnostics', () => {
   const cases = [null, [], { project: null }, ...[
     d => { d.scenes[0].exit = { type: 'water', dur: { valueOf: null }, origin: [null, {}] }; },
@@ -568,6 +650,18 @@ test('CLI delivery mode fails incomplete rights and accepts transparent draft ev
   assert.match(incomplete.stderr, /project\.audio\.license/);
   const complete = runCli(['--delivery', temporaryJson(t, JSON.stringify(deliveryStoryboard()))]);
   assert.equal(complete.status, 0, complete.stderr);
+});
+
+test('CLI strict is a warning policy and does not require draft delivery evidence or upgrade music status', t => {
+  const data = deliveryStoryboard();
+  delete data.music.pendingChecks;
+  const path = temporaryJson(t, JSON.stringify(data));
+  const ordinaryStrict = runCli(['--strict', path]);
+  assert.equal(ordinaryStrict.status, 0, ordinaryStrict.stderr);
+  assert.equal(data.music.status, 'draft');
+  const deliveryStrict = runCli(['--strict', '--delivery', path]);
+  assert.equal(deliveryStrict.status, 1);
+  assert.match(deliveryStrict.stderr, /music\.pendingChecks/);
 });
 
 test('CLI rejects unknown options and still validates the number of paths', () => {
