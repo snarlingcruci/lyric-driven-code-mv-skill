@@ -7,6 +7,7 @@ const isObject = value => value !== null && typeof value === 'object' && !Array.
 const isText = value => typeof value === 'string' && value.trim().length > 0;
 const isFiniteNumber = value => typeof value === 'number' && Number.isFinite(value);
 const unresolved = value => !isText(value) || /^(?:(?:unknown|pending|tbd|unverified)\b|未知|待确认|待核对|待授权)/iu.test(value.trim());
+const genericPendingCheck = /^(?:unknown|pending|tbd|unverified|未知|待确认|待核对|待检查|待核听|未确认|未核对|未检查|未核听|没核对|没有核对)[.!?。！？]*$/iu;
 
 function isIsoTimestamp(value) {
   if (typeof value !== 'string') return false;
@@ -167,6 +168,21 @@ export function analyzeStoryboard(data, options = {}) {
       for (const key of missing) fail(`music.evidence.${key}`, 'draft 交付需要如实记录分析方法与限制；无需假称已人工核听');
     } else if (missing.length) {
       warn('music.evidence', `draft 分析记录尚缺 ${missing.join('、')}；交付时需说明方法和限制`);
+    }
+    if (delivery && (music.pendingChecks === undefined || (Array.isArray(music.pendingChecks) && music.pendingChecks.length === 0))) {
+      fail('music.pendingChecks', 'draft 交付需要非空待核对清单；每项写成片 start/end 与具体未确认内容 check');
+    }
+  }
+  // Optional for existing storyboards; when supplied, checks remain inspectable in every mode.
+  if (music.pendingChecks !== undefined) {
+    for (const [i, value] of array(music.pendingChecks, 'music.pendingChecks').entries()) {
+      const path = `music.pendingChecks[${i}]`;
+      const check = object(value, path);
+      if (!check) continue;
+      interval(check, path);
+      if (text(check.check, `${path}.check`) && genericPendingCheck.test(check.check.trim())) {
+        fail(`${path}.check`, '写明具体未确认内容；仅“待核对”或 pending 等占位文本不能形成可检查清单');
+      }
     }
   }
   let previousBeat = -Infinity;
@@ -351,7 +367,7 @@ export function analyzeStoryboard(data, options = {}) {
 }
 
 function main(args) {
-  const usage = '用法：node validate-storyboard.mjs [--strict] [--delivery] <storyboard.json>\n      node validate-storyboard.mjs --help\n--strict：警告也令退出码为 1；--delivery：启用发布许可与分析证据检查';
+  const usage = '用法：node validate-storyboard.mjs [--strict] [--delivery] <storyboard.json>\n      node validate-storyboard.mjs --help\n--strict：结构检查中的警告也令退出码为 1，不证明可发布或已核听；--delivery：检查许可记录、音乐证据与 draft 待核对清单';
   if (args.length === 1 && args[0] === '--help') {
     console.log(usage);
     return;

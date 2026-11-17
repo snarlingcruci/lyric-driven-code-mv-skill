@@ -7,7 +7,7 @@ const positive = (value, name) => {
   if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} 必须为正有限数`);
 };
 
-export function collectSampleTimes({ duration, fps, scenes = [], samples = 16 }) {
+export function collectSampleTimes({ duration, fps, scenes = [], music = {}, samples = 16 }) {
   positive(duration, 'duration');
   positive(fps, 'fps');
   if (!Number.isInteger(samples) || samples < 2 || samples > 1000) throw new Error('samples 必须为 2–1000 的整数');
@@ -27,6 +27,9 @@ export function collectSampleTimes({ duration, fps, scenes = [], samples = 16 })
       add(scene.end - scene.exit.dur / 2);
     }
     for (const event of scene.events ?? []) around(event.at);
+  }
+  for (const beat of music?.beats ?? []) {
+    if (Number.isFinite(beat)) add(Math.max(0, Math.min(last, beat - 1 / fps)));
   }
   return [...times].sort((a, b) => a - b);
 }
@@ -53,41 +56,85 @@ function shuffled(values) {
   return copy;
 }
 
-export async function runDeterminismQA(renderFrame, { times, frameOptions = {} } = {}) {
-  if (typeof renderFrame !== 'function') throw new Error('模块必须导出 renderFrame(t, options)');
-  if (!Array.isArray(times) || !times.length || times.length > 10000 || times.some(t => !Number.isFinite(t) || t < 0)) {
-    throw new Error('检查时间必须为 1–10000 个非负有限数');
+function preserveCleanupError(error, cleanupError) {
+  // 保留原始异常身份；冻结异常或非对象异常无法附加字段时，仍报告清理失败。
+  try {
+    Object.defineProperty(error, 'cleanupError', { value: cleanupError, configurable: true });
+  } catch {
+    console.error(`资源清理失败：${cleanupError?.message ?? String(cleanupError)}`);
   }
-  const ordered = [...new Set(times)].sort((a, b) => a - b);
-  const baseline = new Map();
-  const failures = [];
-  let renderCount = 0;
-  const orders = [
-    ['forward', ordered], ['repeat', ordered],
-    ['reverse', [...ordered].reverse()], ['random', shuffled(ordered)]
-  ];
-  for (const [order, sequence] of orders) {
-    for (const time of sequence) {
-      // 立即哈希；允许渲染器复用缓冲，不保留可变帧引用。
-      const actualHash = frameHash(await renderFrame(time, frameOptions));
+}
+
+export async function runDeterminismQA(renderFrame, { times, frameOptions = {}, warmupFrames = 0, teardown } = {}) {
+  if (teardown !== undefined && typeof teardown !== 'function') throw new Error('teardown 必须为函数');
+  let failed = false;
+  let operationError;
+  try {
+    if (typeof renderFrame !== 'function') throw new Error('模块必须导出 renderFrame(t, options)');
+    if (!Array.isArray(times) || !times.length || times.length > 10000 || times.some(t => !Number.isFinite(t) || t < 0)) {
+      throw new Error('检查时间必须为 1–10000 个非负有限数');
+    }
+    if (![0, 2, 3].includes(warmupFrames)) throw new Error('warmupFrames 必须为 0、2 或 3；0 为禁用预热');
+    const ordered = [...new Set(times)].sort((a, b) => a - b);
+    const baseline = new Map();
+    const failures = [];
+    const warmupHashes = new Map();
+    let renderCount = 0;
+    const renderHash = async time => {
+      // 预热与正式检查使用同一 profile，立即哈希以兼容复用缓冲。
+      const hash = frameHash(await renderFrame(time, frameOptions));
       renderCount++;
-      if (order === 'forward') baseline.set(time, actualHash);
-      else if (baseline.get(time) !== actualHash) failures.push({ time, order, expectedHash: baseline.get(time), actualHash });
+      return hash;
+    };
+    for (const time of ordered) {
+      if (!warmupFrames) break;
+      const hashes = [];
+      for (let i = 0; i < warmupFrames; i++) hashes.push(await renderHash(time));
+      warmupHashes.set(time, hashes);
+    }
+    const warmupRenderCount = renderCount;
+    const orders = [
+      ['forward', ordered], ['repeat', ordered],
+      ['reverse', [...ordered].reverse()], ['random', shuffled(ordered)]
+    ];
+    for (const [order, sequence] of orders) {
+      for (const time of sequence) {
+        const actualHash = await renderHash(time);
+        if (order === 'forward') baseline.set(time, actualHash);
+        else if (baseline.get(time) !== actualHash) failures.push({ time, order, expectedHash: baseline.get(time), actualHash });
+      }
+    }
+    const failedTimes = new Set(failures.map(failure => failure.time));
+    const warmupMismatch = [...warmupHashes].filter(([time, hashes]) => new Set([...hashes, baseline.get(time)]).size > 1)
+      .map(([time, hashes]) => ({ time, hashes, baselineHash: baseline.get(time), stabilized: !failedTimes.has(time) }));
+    return {
+      schemaVersion: 1, status: failures.length ? 'fail' : 'pass',
+      testedFrameCount: ordered.length, renderCount,
+      formalRenderCount: renderCount - warmupRenderCount,
+      warmupFrames, warmupRenderCount,
+      warmupStatus: !warmupFrames ? 'disabled' : warmupMismatch.length ? 'mismatch' : 'stable',
+      warmupMismatch, renderProfile: frameOptions,
+      orders: orders.map(([name]) => name),
+      frames: ordered.map(time => ({ time, sha256: baseline.get(time) })),
+      failures,
+      limitation: '仅证明所抽样时间在本次渲染环境中的像素一致性；预热差异单独记录，不证明歌词对齐、授权或成片观感。'
+    };
+  } catch (error) {
+    failed = true;
+    operationError = error;
+    throw error;
+  } finally {
+    try { await teardown?.(); }
+    catch (cleanupError) {
+      if (failed) preserveCleanupError(operationError, cleanupError);
+      else throw cleanupError;
     }
   }
-  return {
-    schemaVersion: 1, status: failures.length ? 'fail' : 'pass',
-    testedFrameCount: ordered.length, renderCount,
-    orders: orders.map(([name]) => name),
-    frames: ordered.map(time => ({ time, sha256: baseline.get(time) })),
-    failures,
-    limitation: '仅证明所抽样时间在本次渲染环境中的像素一致性；不证明歌词对齐、授权或成片观感。'
-  };
 }
 
 async function main(args) {
   if (args.includes('--help')) {
-    console.log('用法：node qa.mjs <frame.mjs> --duration 12 --fps 30 [--samples 16] [--storyboard file.json] [--times 0,5.1,6] [--out qa.json]');
+    console.log('用法：node qa.mjs <frame.mjs> --duration 12 --fps 30 [--samples 16] [--storyboard file.json] [--times 0,5.1,6] [--warmup-frames 3] [--out qa.json]\n预热：每个时间点连续渲染 2 或 3 帧；默认 3，设为 0 禁用。模块可导出 async cleanup() 释放资源、frameOptionsForStoryboard(data) 应用分镜渲染配置。');
     return;
   }
   const modulePath = args.shift();
@@ -95,39 +142,63 @@ async function main(args) {
   const opts = {};
   for (let i = 0; i < args.length; i += 2) {
     const key = args[i];
-    if (!['--duration', '--fps', '--samples', '--storyboard', '--times', '--out'].includes(key) || !args[i + 1] || args[i + 1].startsWith('--')) {
+    if (!['--duration', '--fps', '--samples', '--storyboard', '--times', '--warmup-frames', '--out'].includes(key) || !args[i + 1] || args[i + 1].startsWith('--')) {
       throw new Error(`未知参数或缺少值：${key}`);
     }
     if (Object.hasOwn(opts, key)) throw new Error(`重复参数：${key}`);
     opts[key] = args[i + 1];
   }
   const module = await import(pathToFileURL(resolve(modulePath)).href);
-  const storyboard = opts['--storyboard'] ? JSON.parse(await readFile(resolve(opts['--storyboard']), 'utf8')) : null;
-  const duration = Number(opts['--duration'] ?? storyboard?.project?.duration ?? module.DURATION);
-  const fps = Number(opts['--fps'] ?? storyboard?.project?.fps ?? module.FPS ?? 30);
-  positive(duration, 'duration');
-  positive(fps, 'fps');
-  const times = opts['--times'] ? opts['--times'].split(',').map(value => {
-    if (!value.trim()) throw new Error('时间列表含空值');
-    return Number(value);
-  }) : collectSampleTimes({ duration, fps, samples: Number(opts['--samples'] ?? 16), scenes: storyboard?.scenes ?? module.SCENES ?? [] });
-  if (times.some(t => t >= duration)) throw new Error('检查时间必须位于 [0,duration)');
-  const report = await runDeterminismQA(module.renderFrame, { times });
-  report.module = resolve(modulePath);
-  report.duration = duration;
-  report.fps = fps;
-  if (opts['--out']) {
-    const output = resolve(opts['--out']);
-    await mkdir(dirname(output), { recursive: true });
-    await writeFile(output, `${JSON.stringify(report, null, 2)}\n`);
-  }
-  console.log(`确定性检查 ${report.status}：${report.testedFrameCount} 个时间点，${report.renderCount} 次渲染，${report.failures.length} 处不一致`);
-  if (report.failures.length) {
-    console.error(JSON.stringify(report.failures, null, 2));
-    process.exitCode = 1;
+  let failed = false;
+  let operationError;
+  try {
+    const storyboard = opts['--storyboard'] ? JSON.parse(await readFile(resolve(opts['--storyboard']), 'utf8')) : null;
+    const duration = Number(opts['--duration'] ?? storyboard?.project?.duration ?? module.DURATION);
+    const fps = Number(opts['--fps'] ?? storyboard?.project?.fps ?? module.FPS ?? 30);
+    positive(duration, 'duration');
+    positive(fps, 'fps');
+    const times = opts['--times'] ? opts['--times'].split(',').map(value => {
+      if (!value.trim()) throw new Error('时间列表含空值');
+      return Number(value);
+    }) : collectSampleTimes({ duration, fps, samples: Number(opts['--samples'] ?? 16), scenes: storyboard?.scenes ?? module.SCENES ?? [], music: storyboard?.music ?? module.MUSIC ?? {} });
+    if (times.some(t => t >= duration)) throw new Error('检查时间必须位于 [0,duration)');
+    const frameOptions = storyboard && module.frameOptionsForStoryboard ? await module.frameOptionsForStoryboard(storyboard) : {};
+    // CLI 在整个操作结束后清理；不把 cleanup 再传给 runDeterminismQA。
+    const report = await runDeterminismQA(module.renderFrame, { times, frameOptions, warmupFrames: Number(opts['--warmup-frames'] ?? 3) });
+    report.module = resolve(modulePath);
+    report.duration = duration;
+    report.fps = fps;
+    if (opts['--out']) {
+      const output = resolve(opts['--out']);
+      await mkdir(dirname(output), { recursive: true });
+      await writeFile(output, `${JSON.stringify(report, null, 2)}\n`);
+    }
+    console.log(`确定性检查 ${report.status}：${report.testedFrameCount} 个时间点，${report.renderCount} 次渲染（预热 ${report.warmupRenderCount} 次），${report.failures.length} 处正式不一致`);
+    if (report.warmupMismatch.length) {
+      console.error(`预热差异：${report.warmupMismatch.length} 个时间点；stabilized=true 仅表示后续四种顺序一致，请固定光栅路径并检查字体和资源初始化。`);
+      console.error(JSON.stringify(report.warmupMismatch, null, 2));
+    }
+    if (report.failures.length) {
+      console.error(JSON.stringify(report.failures, null, 2));
+      process.exitCode = 1;
+    }
+  } catch (error) {
+    failed = true;
+    operationError = error;
+    throw error;
+  } finally {
+    try { await module.cleanup?.(); }
+    catch (cleanupError) {
+      if (failed) preserveCleanupError(operationError, cleanupError);
+      else throw new Error(`资源清理失败：${cleanupError?.message ?? String(cleanupError)}`, { cause: cleanupError });
+    }
   }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  main(process.argv.slice(2)).catch(error => { console.error(`确定性检查失败：${error.message}`); process.exitCode = 1; });
+  main(process.argv.slice(2)).catch(error => {
+    console.error(`确定性检查失败：${error?.message ?? String(error)}`);
+    if (error != null && Object.hasOwn(Object(error), 'cleanupError')) console.error(`资源清理失败：${error.cleanupError?.message ?? String(error.cleanupError)}`);
+    process.exitCode = 1;
+  });
 }
