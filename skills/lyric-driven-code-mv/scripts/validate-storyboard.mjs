@@ -3,10 +3,39 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const EPSILON = 1e-6;
+const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const isText = value => typeof value === 'string' && value.trim().length > 0;
+const isFiniteNumber = value => typeof value === 'number' && Number.isFinite(value);
+const unresolved = value => !isText(value) || /^(?:(?:unknown|pending|tbd|unverified)\b|未知|待确认|待核对|待授权)/iu.test(value.trim());
+
+function isIsoTimestamp(value) {
+  if (typeof value !== 'string') return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,3})?(Z|[+-]\d{2}:\d{2})$/u.exec(value);
+  if (!match) return false;
+  const [year, month, day, hour, minute, second] = match.slice(1, 7).map(Number);
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (month < 1 || month > 12 || day < 1 || day > days[month - 1] || hour > 23 || minute > 59 || second > 59) return false;
+  if (match[7] !== 'Z') {
+    const [offsetHour, offsetMinute] = match[7].slice(1).split(':').map(Number);
+    if (offsetHour > 23 || offsetMinute > 59) return false;
+  }
+  return Number.isFinite(Date.parse(value));
+}
 
 export function validateStoryboard(data) {
+  return analyzeStoryboard(data).errors;
+}
+
+export function analyzeStoryboard(data, options = {}) {
   const errors = [];
+  const warnings = [];
   const fail = (path, message) => errors.push(`${path}: ${message}`);
+  const warn = (path, message) => warnings.push(`${path}: ${message}`);
+  const settings = isObject(options) ? options : {};
+  const beatToleranceMs = isFiniteNumber(settings.beatToleranceMs) && settings.beatToleranceMs >= 0 ? settings.beatToleranceMs : 80;
+  let delivery = settings.delivery === true;
+  const deliveryIssue = (path, message) => (delivery ? fail : warn)(path, message);
   const object = (value, path) => {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) {
       fail(path, '必须为对象');
@@ -46,7 +75,7 @@ export function validateStoryboard(data) {
     return seen;
   };
 
-  if (!object(data, 'storyboard')) return errors;
+  if (!object(data, 'storyboard')) return { errors, warnings };
   if (data.schemaVersion !== 1) fail('schemaVersion', '必须为 1');
   if (data.timebase !== 'clip') fail('timebase', '必须为 clip；所有时间点使用成片秒');
 
@@ -73,11 +102,28 @@ export function validateStoryboard(data) {
   if (audio) {
     text(audio.path, 'project.audio.path');
     if (!['source', 'clip'].includes(audio.timebase)) fail('project.audio.timebase', '必须为 source 或 clip');
+    if (isText(audio.use) && ['publish', 'public', 'commercial'].includes(audio.use.trim().toLowerCase())) delivery = true;
+    const audioFields = ['license', 'credit', 'url', 'licenseUrl', 'use'];
+    for (const key of [...audioFields, 'provenance']) {
+      if (audio[key] !== undefined && typeof audio[key] !== 'string') fail(`project.audio.${key}`, '若提供，必须为字符串');
+    }
+    const required = audio.provenance === 'original' ? ['license', 'credit', 'use'] : audioFields;
+    const missing = required.filter(key => unresolved(audio[key]));
+    if (missing.length) {
+      if (delivery) {
+        for (const key of missing) fail(`project.audio.${key}`, '发布检查需要非空且已明确的记录；unknown/pending 等仍为未解决');
+      } else {
+        warn('project.audio', `许可记录尚未完成：${missing.join('、')}；发布前核对授权与署名义务`);
+      }
+    }
   }
 
   // sourceOffset is metadata: interval checks always use the unshifted clip clock.
   const duration = project.duration;
   const validDuration = typeof duration === 'number' && Number.isFinite(duration) && duration > 0;
+  const validInterval = entry => isObject(entry) && isFiniteNumber(entry.start) && isFiniteNumber(entry.end)
+    && entry.start >= 0 && entry.start < entry.end && validDuration && entry.end <= duration;
+  const intersects = (a, b) => validInterval(a) && validInterval(b) && a.start < b.end && b.start < a.end;
   const interval = (entry, path) => {
     const startValid = finite(entry.start, `${path}.start`);
     const endValid = finite(entry.end, `${path}.end`);
@@ -95,6 +141,8 @@ export function validateStoryboard(data) {
     id(lyric.id, `${path}.id`, lyricIds);
     interval(lyric, path);
     text(lyric.text, `${path}.text`);
+    if (lyric.allowSceneSplit !== undefined && typeof lyric.allowSceneSplit !== 'boolean') fail(`${path}.allowSceneSplit`, '若提供，必须为布尔值');
+    if (lyric.splitReason !== undefined && typeof lyric.splitReason !== 'string') fail(`${path}.splitReason`, '若提供，必须为字符串');
     if (typeof lyric.id === 'string') lyricsById.set(lyric.id, lyric);
   });
 
@@ -102,14 +150,35 @@ export function validateStoryboard(data) {
   if (!['illustrative', 'draft', 'verified'].includes(music.status)) {
     fail('music.status', '必须为 illustrative、draft 或 verified');
   }
+  const evidence = music.evidence === undefined ? {} : object(music.evidence, 'music.evidence') ?? {};
+  for (const key of ['method', 'limitations', 'reviewer', 'reviewedAt']) {
+    if (evidence[key] !== undefined && typeof evidence[key] !== 'string') fail(`music.evidence.${key}`, '若提供，必须为字符串');
+  }
+  if (music.presentationNotice !== undefined && typeof music.presentationNotice !== 'boolean') fail('music.presentationNotice', '若提供，必须为布尔值');
+  if (music.status === 'verified' && (!isText(evidence.reviewer) || !isIsoTimestamp(evidence.reviewedAt))) {
+    deliveryIssue('music.evidence', 'verified 需要 reviewer 与有效的 ISO reviewedAt（包含时区）；当前核听记录不完整');
+  }
+  if (music.status === 'illustrative' && music.presentationNotice !== true) {
+    deliveryIssue('music.presentationNotice', 'illustrative 是演示节奏；需明确展示演示提示并记录 presentationNotice:true');
+  }
+  if (music.status === 'draft') {
+    const missing = ['method', 'limitations'].filter(key => !isText(evidence[key]));
+    if (delivery) {
+      for (const key of missing) fail(`music.evidence.${key}`, 'draft 交付需要如实记录分析方法与限制；无需假称已人工核听');
+    } else if (missing.length) {
+      warn('music.evidence', `draft 分析记录尚缺 ${missing.join('、')}；交付时需说明方法和限制`);
+    }
+  }
   let previousBeat = -Infinity;
-  array(music.beats, 'music.beats').forEach((beat, i) => {
+  const beats = array(music.beats, 'music.beats');
+  let validBeatGrid = true;
+  for (const [i, beat] of beats.entries()) {
     const path = `music.beats[${i}]`;
-    if (!finite(beat, path)) return;
-    if (beat < 0 || (validDuration && beat >= duration)) fail(path, '必须位于 [0, duration)');
-    if (beat <= previousBeat) fail(path, '节拍必须严格递增');
+    if (!finite(beat, path)) { validBeatGrid = false; continue; }
+    if (beat < 0 || (validDuration && beat >= duration)) { fail(path, '必须位于 [0, duration)'); validBeatGrid = false; }
+    if (beat <= previousBeat) { fail(path, '节拍必须严格递增'); validBeatGrid = false; }
     previousBeat = beat;
-  });
+  }
   array(music.sections, 'music.sections').forEach((value, i) => {
     const path = `music.sections[${i}]`;
     const section = object(value, path);
@@ -140,9 +209,37 @@ export function validateStoryboard(data) {
     if (!scene) return;
     id(scene.id, `${path}.id`, sceneIds);
     interval(scene, path);
-    const hasSceneInterval = Number.isFinite(scene.start) && Number.isFinite(scene.end);
-    for (const key of ['meaning', 'location', 'objective', 'action', 'feedback', 'outcome', 'exitTransition']) {
+    const hasSceneInterval = validInterval(scene);
+    for (const key of ['meaning', 'location', 'objective', 'action', 'feedback', 'outcome']) {
       text(scene[key], `${path}.${key}`);
+    }
+    if (scene.exit === undefined || scene.exitTransition !== undefined) text(scene.exitTransition, `${path}.exitTransition`);
+    if (scene.exit !== undefined) {
+      const exitPath = `${path}.exit`;
+      const exit = object(scene.exit, exitPath);
+      if (exit) {
+        const types = ['cut', 'dissolve', 'ripple', 'water'];
+        if (!types.includes(exit.type)) fail(`${exitPath}.type`, '必须为 cut、dissolve、ripple 或 water');
+        if (finite(exit.dur, `${exitPath}.dur`)) {
+          if (exit.type === 'cut' && exit.dur !== 0) fail(`${exitPath}.dur`, 'cut 的 dur 必须为 0');
+          else if (types.includes(exit.type) && exit.type !== 'cut'
+            && (exit.dur <= 0 || (hasSceneInterval && exit.dur >= scene.end - scene.start))) {
+            fail(`${exitPath}.dur`, '非 cut 必须满足 0 < dur < 场景长度；转场窗口为 [end-dur, end)');
+          }
+        }
+        if (exit.origin !== undefined && (!Array.isArray(exit.origin) || exit.origin.length !== 2
+          || exit.origin.some(coordinate => !isFiniteNumber(coordinate) || coordinate < 0 || coordinate > 1))) {
+          fail(`${exitPath}.origin`, '必须为 [0, 1] 范围内的二维坐标');
+        }
+        if (exit.target !== undefined) text(exit.target, `${exitPath}.target`);
+        if (types.includes(exit.type) && exit.type !== 'cut') {
+          if (i === scenes.length - 1) {
+            if (exit.target !== 'background') fail(`${exitPath}.target`, '末镜非 cut 必须明确 target:"background"');
+          } else if (exit.target !== undefined && exit.target !== 'next' && (!isObject(scenes[i + 1]) || exit.target !== scenes[i + 1].id)) {
+            fail(`${exitPath}.target`, '普通转场只能指向下一镜（next 或下一镜 id）；目标从 local 0 预卷');
+          }
+        }
+      }
     }
     if (Number.isFinite(scene.start)) {
       if (i === 0 && Math.abs(scene.start) > EPSILON) fail(path, '第一个场景必须从 0 开始');
@@ -158,6 +255,7 @@ export function validateStoryboard(data) {
     }
     previousScene = scene;
 
+    const supportedSceneLyrics = new Set();
     array(scene.lyricIds, `${path}.lyricIds`).forEach((ref, j) => {
       const refPath = `${path}.lyricIds[${j}]`;
       if (!text(ref, refPath)) return;
@@ -167,6 +265,7 @@ export function validateStoryboard(data) {
         && !(lyric.start < scene.end && scene.start < lyric.end)) {
         fail(refPath, '歌词区间必须与场景区间相交');
       }
+      if (lyric && intersects(lyric, scene)) supportedSceneLyrics.add(ref);
     });
     array(scene.actors, `${path}.actors`).forEach((value, j) => {
       const actorPath = `${path}.actors[${j}]`;
@@ -189,31 +288,84 @@ export function validateStoryboard(data) {
       const event = object(value, eventPath);
       if (!event) return;
       text(event.action, `${eventPath}.action`);
+      const supportedEventLyrics = new Set();
+      if (event.lyricIds !== undefined) {
+        const seen = new Set();
+        array(event.lyricIds, `${eventPath}.lyricIds`).forEach((ref, k) => {
+          const refPath = `${eventPath}.lyricIds[${k}]`;
+          if (!text(ref, refPath)) return;
+          if (seen.has(ref)) fail(refPath, `重复标识 ${ref}`);
+          seen.add(ref);
+          const lyric = lyricsById.get(ref);
+          if (!lyric) fail(refPath, `不存在歌词 ${ref}`);
+          else if (hasSceneInterval && validInterval(lyric) && !intersects(lyric, scene)) fail(refPath, '事件歌词必须与所在场景区间相交');
+          else if (intersects(lyric, scene)) {
+            if (supportedSceneLyrics.has(ref) || (isFiniteNumber(event.at) && event.at >= lyric.start && event.at < lyric.end)) supportedEventLyrics.add(ref);
+            else if (isFiniteNumber(event.at)) fail(refPath, '歌词需由场景 lyricIds 支持，或在事件 at 时有效');
+          }
+        });
+      }
+      const hasHud = event.hud !== undefined;
+      let validHud = false;
+      if (hasHud) {
+        if (typeof event.hud === 'string') validHud = text(event.hud, `${eventPath}.hud`);
+        else if (isObject(event.hud)) validHud = true;
+        else fail(`${eventPath}.hud`, '必须为非空字符串或对象');
+      }
+      for (const key of ['meaning', 'support']) {
+        if (event[key] !== undefined && typeof event[key] !== 'string') fail(`${eventPath}.${key}`, '若提供，必须为字符串');
+      }
+      if (validHud && supportedEventLyrics.size === 0 && supportedSceneLyrics.size === 0 && !isText(event.meaning) && !isText(event.support)) {
+        warn(`${eventPath}.hud`, 'HUD 缺少有效歌词依据或 event.meaning/support 叙事说明；间奏 HUD 可记录其目的');
+      }
       if (!finite(event.at, `${eventPath}.at`)) return;
       if (hasSceneInterval && !(event.at >= scene.start && event.at < scene.end)) {
         fail(`${eventPath}.at`, '事件必须位于场景 [start, end)');
       }
       if (event.at < previousEvent) fail(`${eventPath}.at`, '事件必须按 at 非递减排列');
       previousEvent = event.at;
+      if (event.sync === 'beat' && hasSceneInterval && event.at >= scene.start && event.at < scene.end && validBeatGrid) {
+        if (beats.length === 0) warn(`${eventPath}.at`, 'sync:"beat" 但 music.beats 为空，尚无可核对的节拍网格');
+        else {
+          const nearest = beats.reduce((closest, beat) => Math.abs(event.at - beat) < Math.abs(event.at - closest) ? beat : closest);
+          const offsetMs = (event.at - nearest) * 1000;
+          if (Math.abs(offsetMs) > beatToleranceMs + EPSILON) {
+            warn(`${eventPath}.at`, `sync:"beat" 偏离最近节拍 ${nearest} 秒：offsetMs=${Number(offsetMs.toFixed(3))}；容差 ${beatToleranceMs} ms`);
+          }
+        }
+      }
     });
   });
-  return errors;
+  const boundaries = [];
+  for (let i = 1; i < scenes.length; i++) {
+    if (validInterval(scenes[i - 1]) && validInterval(scenes[i]) && Math.abs(scenes[i - 1].end - scenes[i].start) <= EPSILON) boundaries.push(scenes[i - 1].end);
+  }
+  if (Array.isArray(data.lyrics)) data.lyrics.forEach((lyric, i) => {
+    if (!validInterval(lyric) || !isText(lyric.id) || !isText(lyric.text)) return;
+    const crossed = boundaries.filter(boundary => lyric.start < boundary - EPSILON && lyric.end > boundary + EPSILON);
+    if (crossed.length && !(lyric.allowSceneSplit === true && isText(lyric.splitReason))) {
+      warn(`lyrics[${i}]`, `一条歌词跨主镜头边界 ${crossed.join('、')} 秒；若有意拆分，记录 allowSceneSplit:true 与非空 splitReason`);
+    }
+  });
+  return { errors, warnings };
 }
 
 function main(args) {
-  const usage = '用法：node validate-storyboard.mjs <storyboard.json>\n      node validate-storyboard.mjs --help';
+  const usage = '用法：node validate-storyboard.mjs [--strict] [--delivery] <storyboard.json>\n      node validate-storyboard.mjs --help\n--strict：警告也令退出码为 1；--delivery：启用发布许可与分析证据检查';
   if (args.length === 1 && args[0] === '--help') {
     console.log(usage);
     return;
   }
-  if (args.length !== 1) {
+  const flags = new Set(args.filter(arg => arg.startsWith('--')));
+  const paths = args.filter(arg => !arg.startsWith('--'));
+  if (paths.length !== 1 || [...flags].some(flag => !['--strict', '--delivery'].includes(flag))) {
     console.error(usage);
     process.exitCode = 1;
     return;
   }
   let source;
   try {
-    source = readFileSync(args[0], 'utf8').replace(/^\uFEFF/u, '');
+    source = readFileSync(paths[0], 'utf8').replace(/^\uFEFF/u, '');
   } catch (error) {
     console.error(`无法读取 JSON 文件：${error.message}`);
     process.exitCode = 1;
@@ -227,9 +379,13 @@ function main(args) {
     process.exitCode = 1;
     return;
   }
-  const errors = validateStoryboard(data);
+  const { errors, warnings } = analyzeStoryboard(data, { delivery: flags.has('--delivery') });
+  if (warnings.length) console.warn(warnings.map(message => `警告：${message}`).join('\n'));
   if (errors.length) {
     console.error(errors.join('\n'));
+    process.exitCode = 1;
+  } else if (flags.has('--strict') && warnings.length) {
+    console.error(`严格检查未通过：仍有 ${warnings.length} 条警告。`);
     process.exitCode = 1;
   } else {
     console.log('分镜校验通过。');
