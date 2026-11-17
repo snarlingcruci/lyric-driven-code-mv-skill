@@ -102,6 +102,7 @@ export function analyzeStoryboard(data, options = {}) {
   const audio = object(project.audio, 'project.audio');
   if (audio) {
     text(audio.path, 'project.audio.path');
+    if (audio.sha256 !== undefined && (typeof audio.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(audio.sha256))) fail('project.audio.sha256', '若提供，必须为64位十六进制SHA-256');
     if (!['source', 'clip'].includes(audio.timebase)) fail('project.audio.timebase', '必须为 source 或 clip');
     if (isText(audio.use) && ['publish', 'public', 'commercial'].includes(audio.use.trim().toLowerCase())) delivery = true;
     const audioFields = ['license', 'credit', 'url', 'licenseUrl', 'use'];
@@ -123,13 +124,14 @@ export function analyzeStoryboard(data, options = {}) {
   const duration = project.duration;
   const validDuration = typeof duration === 'number' && Number.isFinite(duration) && duration > 0;
   const validInterval = entry => isObject(entry) && isFiniteNumber(entry.start) && isFiniteNumber(entry.end)
-    && entry.start >= 0 && entry.start < entry.end && validDuration && entry.end <= duration;
+    && entry.start >= 0 && entry.start < entry.end && validDuration && entry.start < duration && entry.end <= duration + EPSILON;
   const intersects = (a, b) => validInterval(a) && validInterval(b) && a.start < b.end && b.start < a.end;
   const interval = (entry, path) => {
     const startValid = finite(entry.start, `${path}.start`);
     const endValid = finite(entry.end, `${path}.end`);
     if (startValid && entry.start < 0) fail(`${path}.start`, '必须大于或等于 0');
-    if (endValid && validDuration && entry.end > duration) fail(`${path}.end`, '不得超过成片 duration');
+    if (startValid && validDuration && entry.start >= duration) fail(`${path}.start`, '必须小于成片 duration');
+    if (endValid && validDuration && entry.end > duration + EPSILON) fail(`${path}.end`, '不得超过成片 duration（舍入容差1e-6秒）');
     if (startValid && endValid && entry.start >= entry.end) fail(path, '必须满足 start < end');
   };
 
@@ -335,6 +337,7 @@ export function analyzeStoryboard(data, options = {}) {
         warn(`${eventPath}.hud`, 'HUD 缺少有效歌词依据或 event.meaning/support 叙事说明；间奏 HUD 可记录其目的');
       }
       if (!finite(event.at, `${eventPath}.at`)) return;
+      if (validDuration && (event.at < 0 || event.at >= duration)) fail(`${eventPath}.at`, '事件必须位于成片 [0,duration)');
       if (hasSceneInterval && !(event.at >= scene.start && event.at < scene.end)) {
         fail(`${eventPath}.at`, '事件必须位于场景 [start, end)');
       }

@@ -10,7 +10,7 @@ description: Use when a music video needs code animation that responds to lyric 
 ## 工作流程
 
 1. **固定输入与证据。** 确认歌曲文件及版本、校对歌词、截取范围、画幅、人物设定和交付范围。自己找歌时先读 [音频与授权](references/audio-and-rights.md)，核对作品及录音的使用条件。分析参考片时分别记录可见事实、音频核对结果和实现推断；只有完成全时段检查才称“看完整片”。作者工具无源码或声明证据时标为未知。
-2. **建立两条时间线。** 标注句起止、段落、重要重音和留白；语义表记录人物关系、意象和动作。读 [时间与分镜](references/storyboard-and-timing.md)，统一成片坐标与原曲偏移。已有 FFmpeg 时先用 `scripts/analyze-audio.mjs` 生成离线能量、停顿、起音和 BPM/相位候选；不把候选当歌词对齐。按下表记录证据，无法试听也可完成透明标注的草稿。
+2. **建立两条时间线。** 标注句起止、段落、重要重音和留白；语义表记录人物关系、意象和动作。读 [时间与分镜](references/storyboard-and-timing.md)，统一成片坐标与原曲偏移。器乐配原创叙事字幕时说明文案角色，不当作演唱转录。已有 FFmpeg 时先用 `scripts/analyze-audio.mjs` 生成离线能量、停顿、起音和 BPM/相位候选；需要同轴检查镜头和字幕时读 [同步候选图](references/sync-review.md)。不把候选当歌词对齐，无法试听也可完成透明标注的草稿。
 3. **设计任务与世界。** 每镜写目标→行动→反馈→结果。反复意象安排首次出现、变化和再出现；重复副歌增加信息或后果。保留人物身份、装束和道具来龙去脉。像素美术、摄像机、字幕和双人叙事读 [像素世界与演出](references/pixel-game-visuals.md)。
 4. **选择一种实现路线。** 沿用用户指定框架及现有工程。无框架且需要最小可运行工程时，复制 `assets/templates/starter/`：仅 Node 内置模块与 FFmpeg 即可预览和导出。HTML 动效工程可采用 HyperFrames，React 工程优先 Remotion。实现前读 [依赖与交付](references/dependencies-and-delivery.md)，列出必需项、已有项和可选项；安装包、下载浏览器/模型/字体、使用 API 或付费服务前先说明并沿用已有授权。
 5. **完成代表片段。** 新作品先完成约 10–15 秒，包含人物动作、歌词意象任务、反馈变化及转场；用户指定其他长度或修改已有工程时按其范围。分镜 JSON 作为时长、歌词、场景边界、转场及音乐状态的真源，代码按 `scene.id` 提供画法。每帧由时间直接求值，粒子固定种子。出口转场占前镜尾段，下一镜固定 `local=0` 预卷，不增加总时长。执行结构校验和 `scripts/qa.mjs` 的重复、逆序、乱序像素比较。
@@ -28,7 +28,7 @@ description: Use when a music video needs code animation that responds to lyric 
 
 ## 模板与命令
 
-复制 [原创 12 秒分镜](assets/storyboard-example.json) 并替换内容。最小工程见 [starter 说明](assets/templates/starter/README.md)，自带纸船、两岸灯光、尾段转场、高分辨率字幕及本地生成的原创节奏。`export.mjs --storyboard` 读取分镜配置；真实歌曲用 `--audio` 指定文件，按 `scene.id` 调整或注册画法。字幕与音乐状态提示由 JSON 生成，无需手工维护另一套时点。
+复制 [原创 12 秒分镜](assets/storyboard-example.json) 并替换内容。最小工程见 [starter 说明](assets/templates/starter/README.md)，自带纸船、两岸灯光、尾段转场、高分辨率字幕及本地生成的原创节奏。`export.mjs --storyboard` 读取分镜配置；真实歌曲先更新 `project.audio` 与证据，`--audio` 只能重定位同一素材，按 `scene.id` 调整或注册画法。导出保存实际音轨哈希及来源记录，外部音轨有 `credit` 时生成片尾短署名，发布前仍核对完整署名义务。字幕与音乐状态提示由 JSON 生成。
 
 以下在 skill 目录运行；其他目录使用脚本的绝对路径：
 
@@ -36,8 +36,10 @@ description: Use when a music video needs code animation that responds to lyric 
 node scripts/analyze-audio.mjs path/to/song.wav --start 37.2 --duration 12 --out work/audio-analysis.json
 node scripts/validate-storyboard.mjs assets/storyboard-example.json
 node scripts/validate-storyboard.mjs path/to/storyboard.json --delivery
+node scripts/visualize-sync.mjs path/to/storyboard.json work/audio-analysis.json --out work/sync-review.svg
 node scripts/qa.mjs assets/templates/starter/frame.mjs --duration 12 --fps 30 --storyboard assets/storyboard-example.json --out work/qa.json
 node assets/templates/starter/export.mjs --storyboard assets/storyboard-example.json --out work/demo.mp4
+node assets/templates/starter/export.mjs --frame-time 5.55 --frame-out work/world-frame.png
 node assets/templates/starter/export.mjs --storyboard path/to/storyboard.json --audio path/to/song.wav --out work/mv.mp4
 ```
 

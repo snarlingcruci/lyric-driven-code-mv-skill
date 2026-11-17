@@ -19,6 +19,14 @@ node export.mjs --preview
 
 最后一条仅启动 `http://127.0.0.1:8765`，自行打开即可预览，Ctrl+C 停止；不会自动启动浏览器。不要直接用 `file://` 打开 HTML，浏览器可能阻止模块导入。预览不带声音。
 
+只排查某个成片时点的画面时，可先导出世界层单帧，无需媒体工具：
+
+```powershell
+node export.mjs --frame-time 5.55 --frame-out C:\你的输出目录\world-frame.png
+```
+
+`--frame-time` 使用成片秒，须在 `[0,duration)`；可与 `--storyboard` 配用。PNG 为384×216世界层，不含正式尺寸ASS字幕；检查字幕需要查看导出MP4的抽帧。单帧模式不能与预览、帧目录或恢复参数混用。
+
 默认 384×216 像素场景，以最近邻放大至 1920×1080，30 fps，360 帧，12 秒。小尺寸功能检查使用 640×360；正式像素稿建议输出网格的整数倍（如 1920×1080），避免不同宽度的像素列。导出先把 PNG 写入 ffmpeg `image2pipe`，不用把所有帧落盘；字幕在放大后由 ASS 绘制，音轨为 48 kHz 原创 WAV，最终编码 H.264 / yuv420p + AAC。文件编码及验收全部成功后才替换 `--out`。
 
 保留 PNG、中断后恢复：
@@ -59,7 +67,11 @@ node export.mjs --storyboard C:\你的工程\storyboard.json --audio C:\你的�
 node export.mjs --storyboard C:\你的工程\storyboard.json --audio C:\你的素材\song.wav --preview
 ```
 
-`--audio` 优先于 `project.audio.path`；后者相对于 JSON 所在目录。`audio.timebase=source` 时从 `project.sourceOffset` 截取 `project.duration` 秒，`clip` 时从音轨0秒截取。源音轨长度不足直接失败。未提供显式音轨的 `illustrative` 分镜使用原创合成节奏；`draft/verified` 必须能读取真实音频，不能回退到演示音乐。`illustrative` 自动显示演示提示；`draft` 全时段显示“草稿 · 待核对落点”；`verified` 按分镜提供的证据记录核对结果。
+`project.audio.path` 相对于 JSON 所在目录。`--audio` 仅用于重定位同一素材：它与声明路径一致，或与仍可读取的声明文件SHA-256相同，或匹配预先记录的 `project.audio.sha256`。原路径已失效又没有哈希时会拒绝覆盖；先核对素材并更新JSON。换歌须同时更新路径、来源、许可、署名与音乐证据，不能把原创模板记录套到另一首歌上。
+
+`audio.timebase=source` 时从 `project.sourceOffset` 截取 `project.duration` 秒，`clip` 时从音轨0秒截取。源音轨长度不足直接失败。`illustrative` 使用模板原创合成节奏并拒绝显式音轨；真实音轨请改为 `draft/verified`，缺文件不能回退到演示音乐。`illustrative` 自动显示演示提示；`draft` 全时段显示“草稿 · 待核对落点”；`verified` 按分镜提供的证据记录核对结果。
+
+每次MP4导出生成同路径 `.mp4.assets.json`，保存声明的来源/许可、实际音轨与裁剪WAV哈希、裁切起点、分镜及输出哈希。帧目录另保留 `asset-manifest.json`。外部非 `original` 音轨有 `credit` 时，在最后最多4秒烧入“音乐：署名｜许可”短署名；完整来源、许可链接与修改说明保留在记录中，按具体许可补到发布说明或片尾并检查可读性。记录完整和哈希相同都不证明许可有效。
 
 `SCENE_RENDERERS[scene.id]` 是唯一画法注册表，内置 `send` 与 `receive`。两个内置演出按镜头局部时长归一化，换镜头时窗会改变实际动作节奏；事件中的文字描述仍需由对应画法实现，新 ID 缺画法会失败。JSON 能调整演出时间，不能自动产生新人物动作。完整分镜仍先用 `validate-storyboard.mjs --delivery` 校验叙事、事件、授权与音乐证据；导出另用自包含 `timeline.mjs` 校验实际可执行字段，复制模板后也能独立运行。
 

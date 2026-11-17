@@ -33,11 +33,11 @@ export function createTimeline(data, sceneIds = ['send', 'receive']) {
   if (!Array.isArray(data.lyrics)) fail('lyrics须为数组');
   const cueIds = new Set();
   const captions = data.lyrics.map((cue, i) => {
-    if (!object(cue) || !text(cue.id) || cueIds.has(cue.id) || !finite(cue.start) || !finite(cue.end) || cue.start < 0 || cue.end <= cue.start || cue.end > p.duration) fail(`lyrics[${i}]id或时间无效`);
+    if (!object(cue) || !text(cue.id) || cueIds.has(cue.id) || !finite(cue.start) || !finite(cue.end) || cue.start < 0 || cue.start >= p.duration || cue.end <= cue.start || cue.end > p.duration + 1e-6) fail(`lyrics[${i}]id或时间无效`);
     cueIds.add(cue.id);
     const zh = cue.zh ?? cue.text;
     if (!text(zh) || (cue.en !== undefined && typeof cue.en !== 'string')) fail(`lyrics[${i}]须提供text/zh及可选en文本`);
-    return { id: cue.id, start: cue.start, end: cue.end, zh, en: cue.en ?? '' };
+    return { id: cue.id, start: cue.start, end: Math.min(cue.end, p.duration), zh, en: cue.en ?? '' };
   });
   const status = data.music.status;
   const notice = status === 'illustrative' ? (text(data.music.presentationNotice) ? data.music.presentationNotice : '演示时点 · 原创合成节奏') : status === 'draft' ? '草稿 · 待核对落点' : '';

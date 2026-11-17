@@ -63,6 +63,36 @@ test('accepts a scene seam difference smaller than the 1e-6 coverage tolerance',
   assert.deepEqual(validateStoryboard(data), []);
 });
 
+test('rounded interval ends tolerate sub-microsecond differences but real overflow and end beats fail', () => {
+  const data = validStoryboard();
+  data.project.duration = 4064 / 30;
+  data.scenes[1].end = 135.466667;
+  data.lyrics[1].end = 135.466667;
+  data.music.sections[0].end = 135.466667;
+  assert.deepEqual(validateStoryboard(data), []);
+  data.lyrics[1].end = data.project.duration + 2e-6;
+  assert.ok(validateStoryboard(data).some(e => /lyrics\[1\]\.end/.test(e)));
+  data.lyrics[1].end = data.lyrics[1].start;
+  assert.ok(validateStoryboard(data).some(e => /start < end/.test(e)));
+  data.lyrics[1].start = data.project.duration; data.lyrics[1].end = data.project.duration + 5e-7;
+  assert.ok(validateStoryboard(data).some(e => /lyrics\[1\]\.start/.test(e)));
+  data.music.beats.push(data.project.duration);
+  assert.ok(validateStoryboard(data).some(e => /music\.beats/.test(e)));
+});
+
+test('optional audio sha256 must be a complete digest', () => {
+  const data = validStoryboard(); data.project.audio.sha256 = 'a'.repeat(64);
+  assert.deepEqual(validateStoryboard(data), []);
+  data.project.audio.sha256 = 'not-a-hash';
+  assert.ok(validateStoryboard(data).some(e => /audio\.sha256/.test(e)));
+});
+
+test('rounded scene end does not admit an event at the exclusive clip end', () => {
+  const data = validStoryboard(); data.scenes[1].end += 5e-7;
+  data.scenes[1].events.push({ at: data.project.duration, action: 'too-late' });
+  assert.ok(validateStoryboard(data).some(e => /events\[1\]\.at/.test(e)));
+});
+
 test('accepts simultaneous scene events and an event on the following scene start', () => {
   const data = validStoryboard();
   data.scenes[1].events = [{ at: 6, action: 'enter' }, { at: 6, action: 'show-hud', hud: { count: 0 } }];
