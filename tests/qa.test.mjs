@@ -9,6 +9,17 @@ import { collectSampleTimes, runDeterminismQA } from '../skills/lyric-driven-cod
 
 const frame = value => ({ width: 1, height: 1, data: new Uint8ClampedArray([value, 0, 0, 255]) });
 
+test('large RGBA frames warn once per QA run without changing formal determinism', async () => {
+  const warnings = [];
+  const big = { width: 1001, height: 1000, data: new Uint8Array(1001 * 1000 * 4) };
+  const report = await runDeterminismQA(() => big, { times: [0, 1], warmupFrames: 3, onWarning: warning => warnings.push(warning) });
+  assert.equal(report.status, 'pass'); assert.equal(report.renderCount, 14);
+  assert.equal(warnings.length, 1); assert.equal(report.warnings.length, 1);
+  assert.match(warnings[0], /低分辨率|世界层/);
+  const small = await runDeterminismQA(() => frame(1), { times: [0], onWarning: warning => warnings.push(warning) });
+  assert.deepEqual(small.warnings, []); assert.equal(warnings.length, 1);
+});
+
 test('纯时间求值在重复、逆序和乱序请求中一致', async () => {
   const result = await runDeterminismQA(t => frame(Math.round(t * 10)), { times: [0, 0.5, 1] });
   assert.equal(result.status, 'pass');
