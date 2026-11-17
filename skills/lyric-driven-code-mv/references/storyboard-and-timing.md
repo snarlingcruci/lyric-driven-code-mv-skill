@@ -2,7 +2,7 @@
 
 ## 一套成片坐标
 
-源音频从 `sourceOffset` 秒截取。动画与所有歌词、节拍、事件使用成片秒：
+源音频从 `sourceOffset` 秒截取；歌词、节拍和事件统一成片秒：
 
 ```js
 const t = frame / fps;
@@ -10,11 +10,9 @@ const sourceTime = sourceOffset + t;
 const clipTime = annotatedSourceTime - sourceOffset;
 ```
 
-换算在数据入口进行一次；保留原曲标注作为来源信息，渲染读成片字段。例：源片段 `[37.2,49.2)`，原曲句子 `[38,41)` 转为成片 `[0.8,3.8)`。同一句在 `[45,48)` 再出现，转为 `[7.8,10.8)`，使用新的句 ID。
+只在数据入口换算一次。源片段 `[37.2,49.2)` 中句子 `[38,41)` 转为 `[0.8,3.8)`；重复出现的句子分配新 ID。已经剪好的音频记录 `audio.timebase="clip"` 并从零播放；源文件用 `"source"` 并裁掉 `sourceOffset`，避免重复偏移。分析脚本输出已是 clip 秒，不能再减偏移。
 
-区间使用 `[start,end)`。截断跨越片段边界的歌词及事件，保留必要的前置状态。总帧数由目标时间和帧率确定，并让 `duration = durationFrames / fps`；最后一帧是 `(durationFrames-1)/fps`。输入音频若已经剪好，记录 `audio.timebase="clip"` 并从零播放；源音频记录 `"source"` 并裁掉 `sourceOffset`，避免二次偏移。
-
-嵌套场景的相对时间为 `local = t - scene.start`。Remotion 的 Sequence 内 `useCurrentFrame()` 返回局部帧；需要全局事件时间时加回 Sequence 起始帧。不要再减一次镜头起点。
+所有区间用 `[start,end)`。截断跨片段边界的歌词及事件，保留必要前置状态。让 `duration=durationFrames/fps`；最后一帧时间为 `(durationFrames-1)/fps`。嵌套场景的 `local=t-scene.start`，Remotion Sequence 内的帧已是局部帧，不能再减场景起点。
 
 ## 从含义到事件
 
@@ -25,46 +23,66 @@ const clipTime = annotatedSourceTime - sourceOffset;
 | 珍惜纪念物 | 抱起礼物，选择保留，摆上搁板 | 完整礼物留下，保留标记出现 |
 | 无法抵达 | 放出纸船，漂向远方，遇到阻碍 | 船停住，路线断裂，仍有距离 |
 | 付出与消耗 | 攀升、奔跑、跨过风雪 | 距离增大，体力改变；变化对应动作 |
-| 回忆变冷 | 触摸照片，画面结冰，再尝试解冻 | 图标失色、裂纹、温度格逐步改变 |
-| 重新联系 | 两地望向彼此，光锥跨屏，再同步举灯 | 连线完成有明确时点；完成后才执行共同动作 |
+| 回忆变冷 | 触摸照片，结冰，再尝试解冻 | 图标失色、裂纹、温度格变化 |
+| 重新联系 | 两地相望，光锥跨屏，同步举灯 | 连线完成后才共同动作 |
 
-重要落点可以是道具落架、脚落地、失败字样出现、能量发动或连线完成。让动作准备稍早开始、峰值落在已核对的重音上。缓慢观察和句尾停留也要有时间；无歌词镜头允许继续推进地点、记忆和关系。
-
-重复意象增加后果：第一次送出纸船失败；第二次切到另一岸，看到仍搁浅的船与远处灯光，信息改变而未抵达的结果保留。不要因为进入副歌就强行把所有任务改成成功。
+让动作准备稍早开始，峰值对准需要强调的音乐点。缓慢观察、句尾停留和间奏可以继续推进地点、记忆与关系。第一次送纸船失败，第二次揭示另一岸也在等待，可增加信息且保留遗憾；副歌不必全部变成成功。
 
 ## JSON 约定
 
-以下是本 skill 模板及校验器的格式，可增加项目特有字段。
+`schemaVersion:1` 保持兼容，可增加工程特有字段。
 
 | 字段 | 内容 |
 |---|---|
 | `schemaVersion`, `timebase` | `1`、`"clip"` |
-| `project` | `fps`、`duration`、`sourceOffset`、输出及虚拟尺寸、非空 `seed`、`audio:{path,timebase}` |
-| `lyrics[]` | 唯一 `id`、`start`、`end`、校对的 `text`；重复句使用独立 ID |
-| `music` | `status` 为 illustrative/draft/verified；`beats[]` 成片秒；`sections[]:{id,start,end}` |
-| `actors[]` | 稳定身份 `id`，可用 `costumes[]` |
-| `props[]` | 道具 ID 列表；同种道具需要单独追踪时分配不同 ID |
-| `scenes[]` | 唯一 ID、时间、`meaning/location/objective/action/feedback/outcome`、歌词引用、人物/装束、道具、事件、出口转场 |
+| `project` | `fps,duration,sourceOffset,width,height,virtualWidth,virtualHeight,seed,audio` |
+| `project.audio` | `path,timebase,provenance?,license,credit,url?,licenseUrl?,use`，授权说明见音频参考 |
+| `lyrics[]` | `id,start,end,text`；有意跨镜可加 `allowSceneSplit:true,splitReason` |
+| `music` | `status,beats[],sections[]:{id,start,end},evidence?,presentationNotice?` |
+| `music.evidence` | `method,limitations,reviewer?,reviewedAt?`；最后两项用于人工核对 |
+| `actors[]`、`props[]` | 稳定人物 ID 与 `costumes[]`；道具 ID 列表 |
+| `scenes[]` | `id,start,end,meaning,location,objective,action,feedback,outcome,lyricIds,actors,props,events,exit` |
 | `scene.actors[]` | `{id,costume}` 引用根人物表 |
-| `scene.events[]` | `{at,action,hud?}`；`at` 是成片秒且位于该镜头内；事件升序排列 |
-| `scene.lyricIds[]` | 有交集的句 ID；留白镜头可用空数组 |
+| `scene.events[]` | `{at,action,hud?,sync?,lyricIds?,meaning?,support?}`；`at` 为成片秒，位于镜头内且升序 |
+| `scene.exit` | `{type,dur,origin?,target?}`；类型为 cut/dissolve/ripple/water |
 
-主场景按时间覆盖 `[0,duration)`，不重叠、不留洞。跨镜遮罩作为出口转场/覆盖层实现，不通过重叠两个主镜头表达。角色服装在场景里明确指定，换装增加到人物装束表；道具拥有、消耗、保留等连续性另记项目状态并人工核对。
+主场景连续覆盖 `[0,duration)`，不重叠、不留洞。角色装束明确指定；道具拥有、消耗与保留另记状态并核对。`scene.lyricIds` 引用与镜头相交的歌词；留白镜头可为空。
 
-模板允许 beats 为空；没有听辨时保留 `draft`。结构校验会接受 `illustrative`，但发布成片前需要人工确认真实音乐落点。转录与节拍检测可能受伴奏、拖音和半速/双速 BPM 影响。均分逐字点亮属于视觉设计，不等于真实演唱词时间。
+`exitTransition` 自由文本仍接受，用于旧工程的叙事说明；新工程采用结构化 `exit` 确定时序。`cut` 的 `dur` 为 0，其他转场满足 `0 < dur < end-start`。`origin` 是两个 `[0,1]` 归一化坐标。`target` 默认为下一镜，也可明确写下一镜 ID；末镜非 cut 必须 `target:"background"`。
+
+## 出口转场与预卷
+
+```json
+{ "exit": { "type": "water", "dur": 0.9, "origin": [0.55, 0.62] } }
+```
+
+前镜 `[0,6)` 时，转场窗口为 `[5.1,6)`。窗口中前镜继续按当前 `local=t-start` 求值，下一镜固定 `local=0` 预卷，再按遮罩合成。到 `t=6` 切入下一镜并从零正常播放。末镜淡至背景时只揭示项目定义的背景，不虚构下一镜。
+
+转场占前镜尾段，不另加镜头时长，也不延长总片长。将结果动作安排在转场之前或确保遮罩期间仍可读。水面/地平线等跨镜元素通过相同世界坐标或明确遮罩对齐，重点查看转场中点与边界，避免双地平线。
+
+## 语义提示的边界
+
+- 句子被镜头边界切开会提示；有意拆镜时写 `allowSceneSplit:true` 与具体 `splitReason`，字幕层保持连续。不能由提示直接推断叙事一定错误。
+- 仅 `event.sync:"beat"` 检查最近 `beats[]` 的距离，默认容差 80 ms。歌词起句或缓慢动作不必都踩拍；节拍表为空时提示证据不足。调用 `analyzeStoryboard` 的 `beatToleranceMs` 参数可调整容差。
+- HUD 可由事件/镜头的 `lyricIds` 支撑，间奏可由 `event.meaning` 或 `support` 解释因果。`event.lyricIds` 必须与本镜相交，并由 `scene.lyricIds` 支持或在事件 `at` 时有效；预示动作可添加镜头级引用。引用可定位不等于含义已经正确。
+- 普通模式返回提示；`--strict` 要求解决全部提示。`--delivery` 检查发布记录，`audio.use` 为 publish/public/commercial 时也启用发布检查，包括音轨许可与音乐证据。
+
+音乐状态遵循 SKILL.md 三档规则。`draft` 可以有空 beats，但需写方法和限制；`verified` 必须有人工核对记录。均分逐字点亮属于视觉填充；离线起音检测不是歌词识别或对齐。
 
 ## 确定性求值
 
 ```js
-const clamp01 = x => Math.max(0, Math.min(1, x));
 const local = t - shot.start;
-const progress = clamp01((t - actionStart) / actionDuration);
+const progress = Math.max(0, Math.min(1, (t - actionStart) / actionDuration));
 const sprite = Math.floor(Math.max(0, local) * spriteFps) % frames.length;
 const x = Math.round(x0 + (x1 - x0) * progress);
-const snowY = ((seededY + speed * t) % height + height) % height;
-
-// 每次都从相同初态归约整个已发生事件前缀。
 const state = events.filter(e => e.at <= t).reduce(applyEvent, initialState());
 ```
 
-`applyEvent` 为项目定义的纯状态变换；镜头结束后仍要保留的物件写入全局时间数据。位置、镜头、数值、粒子和遮罩均从时间求值，固定种子生成初值。物理动作可以预模拟保存轨迹。用顺序、倒序及随机顺序请求同一批帧，比较同帧像素；自行运行的页面时钟及累积上一帧状态会破坏这个条件。
+位置、镜头、数值、粒子和遮罩都由时间求值，随机初值固定种子；物理可预模拟保存轨迹。`renderFrame(t,options)` 返回 `{width,height,data}`，data 为 RGBA 字节数组；同一时间与 options 应给出相同像素。资源先准备好，不能使用运行中的页面时钟或上一帧累积状态。
+
+```sh
+node scripts/qa.mjs path/to/frame.mjs --duration 12 --fps 30 --storyboard path/to/storyboard.json --out work/qa.json
+```
+
+脚本自动覆盖首尾、每镜首/中/尾、转场前/中/后及事件周围，用正序、重复、逆序和固定乱序比较 SHA-256。`--times 0,5.1,5.55,6` 可专查落点。其他框架提供一个导出相同 RGBA 契约的适配模块；它只检查所抽样时间在当前环境的确定性。
