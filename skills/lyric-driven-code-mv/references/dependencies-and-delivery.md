@@ -17,11 +17,23 @@ Canvas/SVG 是浏览器原生能力；已有浏览器不代表框架要求的版
 
 ## 渲染与恢复
 
-每帧由时间求值，资源在捕获前加载完毕。HyperFrames 时间线可 seek；Remotion 用当前帧与固定种子；starter 的纯 `renderFrame(t)` 输出低分辨率 RGBA，Node zlib 编码 PNG，FFmpeg 整数放大后烧入高分辨率 ASS 字幕与合成节奏。
+每帧由时间求值。HyperFrames 时间线可 seek；Remotion 用当前帧与固定种子；starter 的 `renderFrame(t)` 输出低分辨率 RGBA，Node zlib 编码 PNG，FFmpeg 整数放大后烧入高分辨率 ASS 字幕。`--storyboard` 统一项目参数、时点和音乐状态；仅 `illustrative` 且没有指定音频时合成原创演示节奏，其他状态使用真实音频。
+
+浏览器捕获前等待 `document.fonts.ready` 及实际使用的图片、音频和其他资产完成加载/解码，随后渲染 2–3 帧预热，再开始像素比较或导出。预热解决字体懒加载和首次光栅初始化，页面时钟与上一帧状态仍须排除。验收和导出固定同一浏览器版本、启动参数、视口、设备缩放与字体/资源，记录这一 profile。
+
+**2D Canvas 的逐像素验收与导出**采用固定的软件光栅 profile，例如 Chromium 启动参数：
+
+```js
+args: ['--disable-accelerated-2d-canvas', '--disable-gpu']
+```
+
+部分 2D 操作首次出现会切换光栅路径，GPU 与软件舍入可让相同画面像素不同；固定 profile 后再判断是否为渲染状态漂移。WebGL、Three.js 等需要 GPU 的路线按框架支持配置并固定实际 profile，不把这组 2D 参数作为所有浏览器工程的要求。
+
+QA CLI 默认每个抽样时间 `--warmup-frames 3`；API `runDeterminismQA` 默认 `warmupFrames:0` 保持兼容，需要预热时设为 2 或 3，0 禁用。预热差异在 `warmupMismatch/warmupStatus` 中保留并提示，正式四种顺序仍一致可通过；正式测量持续不一致仍失败。持有浏览器、连接或管道的适配模块导出 `async cleanup()`，CLI 在成功和失败结束时均调用；直接使用 API 时传 `teardown` 释放自己持有的资源。
 
 | 产线 | 适用与取舍 |
 |---|---|
-| PNG/截图落盘 | 长片可恢复，占磁盘。starter `--frames-dir work/frames` 保存每帧；`--resume` 核对配置与 PNG，继续缺失帧。改变尺寸/帧率/种子/渲染代码时用新目录 |
+| PNG/截图落盘 | 长片可恢复，占磁盘。starter `--frames-dir work/frames` 保存每帧；`--resume` 核对配置、JSON/音频内容与 PNG，继续缺失帧。改变输入或渲染代码时用新目录 |
 | PNG 管道直出 | 减少文件读写，适合短片；中断需重来。starter 默认 `image2pipe`，有背压，不承诺固定吞吐速度 |
 
 浏览器工程可沿用受支持截图入口落盘或将编码帧送 FFmpeg stdin，不要逐帧重载资源。恢复不能只看文件名存在；检查编码/尺寸和渲染配置。不要把截图工具绑定的固定耗时当性能保证。
@@ -56,7 +68,7 @@ node path/to/skill/scripts/qa.mjs frame.mjs --duration 12 --fps 30 --storyboard 
 
 确定性报告覆盖所选时间的四种求值顺序。默认低分辨率帧检查世界层；高分辨率字幕/后处理另做重复导出或在适配模块中合成后比较。它不能替代播放和音画核对。
 
-具备条件时完整播放，核对歌曲版本、源偏移、动作落点、逐字填充、异常静音/削波与留白；不能播放/试听时如实写检查范围和 `draft` 待核对项。交付记录包含实际目标、所查帧/落点、技术参数、许可/署名、状态及未解决项，不能用“FFprobe 正常”声称整片语义与音乐同步已通过。
+具备条件时完整播放，核对歌曲版本、源偏移、动作落点、逐字填充、异常静音/削波与留白；不能播放/试听时如实写检查范围，将待核对区间和内容记录为 `music.pendingChecks` 后交付 `draft`。交付记录包含实际目标、所查帧/落点、技术参数、许可/署名、状态及未解决项，不能用“FFprobe 正常”声称整片语义与音乐同步已通过。
 
 ## 官方参考
 

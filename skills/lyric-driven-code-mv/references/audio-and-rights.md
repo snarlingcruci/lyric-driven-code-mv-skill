@@ -6,9 +6,13 @@
 
 ```sh
 node scripts/analyze-audio.mjs "path with spaces/song.mp3" --start 37.2 --duration 12 --out work/analysis.json
+# 已知 BPM：固定速度，只拟合当前片段相位
+node scripts/analyze-audio.mjs "song.mp3" --bpm 110 --out work/analysis.json
+# 曲目页/元数据标注：同时保存可复核的来源依据
+node scripts/analyze-audio.mjs "song.mp3" --bpm 110 --bpm-source metadata --bpm-evidence "实际曲目页URL；页面标注110 BPM" --out work/analysis.json
 ```
 
-默认解码为 8 kHz 单声道 float PCM，可用 `--sample-rate 16000`；`--ffmpeg` 指定现有可执行文件。单次最多 600 秒，超长输入拒绝，整曲较长时分段分析并保留各段偏移。16 kHz 解码 PCM 最多约 38.4 MB，拼接峰值两份约 76.8 MB，另有分析/JSON 内存。
+默认解码为 8 kHz 单声道 float PCM，可用 `--sample-rate 16000`。FFmpeg 路径按 `--ffmpeg`、`FFMPEG_PATH` 环境变量、PATH 的顺序选择；显式路径无效会报错。单次最多 600 秒，超长输入拒绝，整曲较长时分段分析并保留各段偏移。16 kHz 解码 PCM 最多约 38.4 MB，拼接峰值两份约 76.8 MB，另有分析/JSON 内存。
 
 报告 `status:"draft"`、`timebase:"clip"`；`sourceOffset` 保存 `--start`，所有输出时间已是片段秒。
 
@@ -17,12 +21,22 @@ node scripts/analyze-audio.mjs "path with spaces/song.mp3" --start 37.2 --durati
 | `energy.envelope` 的 at/rms/normalized | 找强弱与留白；不能断言某个峰值就是某个词 |
 | `pauses` 的 start/end/maxRms | 候选低能量区；伴奏可能让人声停顿不明显 |
 | `onsets` 的 at/strength | 能量上升候选，可能来自鼓点或其他伴奏 |
-| `tempo` 的 bpm/confidence/phaseSeconds/candidates/ambiguities | 节拍网格候选与半速/双速歧义；置信度为未校准启发式评分 |
+| `tempo` 的 bpm/status/source/confidence/phaseSeconds/evidence | 选出的候选、来源依据与机器拟合状态；置信度为未校准启发式评分 |
+| `tempo.candidates` / `tempo.clusters` | 原始投票前八名 / ±3% 邻近候选簇前八名；簇保留 `range`、`members`、拟合相位和周期证据 |
+| `beats[]` | 从选出 BPM 和相位生成的片段网格，可用于 draft 分镜试排 |
 | `warnings`、`limits` | 证据不足及资源上限 |
 
-网格为 `phaseSeconds + n*60/bpm`，仅取 `[0,duration)` 内候选。静音、恒定音、极弱或过短证据可返回 `bpm:null`，此时 beats 留空；不要填造 BPM。复杂歌曲可能变速，单一 BPM 不能覆盖所有段落。
+网格为 `phaseSeconds + n*60/bpm`，仅取 `[0,duration)` 内候选。`tempo.status` 为 `estimated`、`low-confidence` 或 `unavailable`；前两者可以提供网格，报告始终为 `draft`。低置信网格需把相位、自相关偏弱等限制写进 `music.evidence.limitations`，并保留待试听核对的落点，不能据此声称 `verified`。
+
+自动模式将固定锚点 ±3% 内的投票候选归为一个簇，避免把 109/111 BPM 当成互斥答案；在簇范围内重新拟合相位，减少半 BPM 量化导致的长片段漂移。`range` 是簇成员范围，不是统计置信区间；簇的 `intervalVotes` 汇总相关投票，不代表同样数量的独立拍点。筛选同时要求起音覆盖、投票和周期证据，去均值自相关用于排除随机噪声的正值基线；相位集中度偏低不再单独否决已有周期证据的候选。
+
+`--bpm` 接受大于 0 且不超过 400 的已知速度；自动搜索仍为 45–200 BPM。默认记录 `tempo.source:"user-provided"`；`--bpm-source metadata` 还必须提供 `--bpm-evidence`，保存实际曲目页或元数据记录。外部 BPM 固定后只拟合相位，来源可信与音频相位置信度是两件事。纯函数 `analyzePcm(samples, {bpm:110,bpmSource:"metadata",bpmEvidence:"实际依据"})` 使用相同选项。
+
+静音、恒定音、极弱、过短或非周期噪声可返回 `bpm:null`，此时 `beats` 留空。即使提供 BPM，没有可用相位证据也不会填造零秒网格；所提供数值保存在 `requestedBpm` 和 `evidence` 中。复杂歌曲可能变速，单一 BPM 不能覆盖所有段落。
 
 脚本不识别人声文本、不提供逐词对齐，也不证明试听完成。将选择的方法、误差来源与待核对重音写进分镜 `music.evidence`；实际人工核对后才改 `verified` 并记录人和时间。
+
+仓库音频集成测试通过 `tests/media-tools.mjs` 探测本机工具：默认 PATH 缺 FFmpeg 时有原因地跳过实际解码测试，纯 PCM、参数及错误路径测试仍运行；显式无效的 `FFMPEG_PATH` / `FFPROBE_PATH` 会失败，避免配置错误被隐藏。
 
 ## 获取与记录
 

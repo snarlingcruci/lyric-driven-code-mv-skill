@@ -19,10 +19,86 @@ function validateRate(sampleRate) {
   if (![8000, 16000].includes(sampleRate)) throw new Error('sampleRate 必须为 8000 或 16000。');
 }
 
-function estimateTempo(onsets, novelty, hopSeconds, duration, peakRms) {
-  const empty = reason => ({ bpm: null, confidence: 0, periodSeconds: null, phaseSeconds: null, candidates: [], ambiguities: [], reason });
+function validateBpmOptions({ bpm, bpmSource, bpmEvidence }) {
+  if (bpm === undefined) {
+    if (bpmSource !== undefined || bpmEvidence !== undefined) throw new Error('BPM 来源或依据需要同时提供 --bpm / bpm。');
+    return;
+  }
+  finiteOption(bpm, 'BPM / bpm', { positive: true });
+  if (bpm > 400) throw new Error('BPM / bpm 不得超过 400。');
+  if (bpmSource !== undefined && !['user-provided', 'metadata'].includes(bpmSource)) throw new Error('BPM 来源 bpmSource 必须为 user-provided 或 metadata。');
+  if (bpmEvidence !== undefined && (typeof bpmEvidence !== 'string' || !bpmEvidence.trim())) throw new Error('BPM 依据 bpmEvidence 必须为非空文字。');
+  if (bpmSource === 'metadata' && !bpmEvidence?.trim()) throw new Error('metadata BPM 必须提供 --bpm-evidence / bpmEvidence，记录曲目页或元数据依据。');
+}
+
+function phaseFit(onsets, bpm) {
+  const period = 60 / bpm;
+  let x = 0, y = 0, totalStrength = 0;
+  for (const onset of onsets) {
+    const angle = 2 * Math.PI * onset.at / period;
+    x += Math.cos(angle) * onset.strength;
+    y += Math.sin(angle) * onset.strength;
+    totalStrength += onset.strength;
+  }
+  const alignment = totalStrength ? Math.hypot(x, y) / totalStrength : 0;
+  let phase = Math.atan2(y, x) * period / (2 * Math.PI);
+  phase = ((phase % period) + period) % period;
+  return { alignment: round(alignment), phaseSeconds: Math.min(round(phase), period - Number.EPSILON) };
+}
+
+function periodicityAt(novelty, lag) {
+  let cross = 0, leftPower = 0, rightPower = 0, leftSum = 0, rightSum = 0;
+  const count = novelty.length - lag;
+  if (count <= 1) return { autocorrelation: 0, periodicity: 0 };
+  for (let i = lag; i < novelty.length; i++) {
+    const left = novelty[i], right = novelty[i - lag];
+    cross += left * right;
+    leftPower += left * left;
+    rightPower += right * right;
+    leftSum += left;
+    rightSum += right;
+  }
+  const autocorrelation = leftPower && rightPower ? clamp01(cross / Math.sqrt(leftPower * rightPower)) : 0;
+  // Positive-only novelty has a noise baseline: remove its mean before accepting periodic evidence.
+  const centeredLeft = Math.max(0, leftPower - leftSum * leftSum / count);
+  const centeredRight = Math.max(0, rightPower - rightSum * rightSum / count);
+  const periodicity = centeredLeft && centeredRight ? clamp01((cross - leftSum * rightSum / count) / Math.sqrt(centeredLeft * centeredRight)) : 0;
+  return { autocorrelation: round(autocorrelation), periodicity: round(periodicity) };
+}
+
+function estimateTempo(onsets, novelty, hopSeconds, duration, peakRms, options) {
+  const source = options.bpm === undefined ? 'audio-analysis' : options.bpmSource ?? 'user-provided';
+  const evidence = {
+    method: options.bpm === undefined ? '起音间隔投票、±3% 邻近候选聚类、包络自相关与相位拟合。' : '采用已提供的 BPM，仅用片段起音拟合相位。',
+    bpm: options.bpmEvidence?.trim() ?? (options.bpm === undefined ? '离线音频候选；没有外部 BPM 依据。' : `用户提供 ${options.bpm} BPM。`),
+    limitations: '启发式证据未经真实歌曲标定；BPM 来源不证明拍号、歌词对齐或人工核对，半速/双速与弱拍仍需听辨。',
+  };
+  const empty = reason => ({ bpm: null, status: 'unavailable', source, confidence: 0, periodSeconds: null, phaseSeconds: null, candidates: [], clusters: [], ambiguities: [], evidence, ...(options.bpm === undefined ? {} : { requestedBpm: options.bpm }), reason });
   if (peakRms < ABSOLUTE_RMS_FLOOR) return empty('静音或能量低于绝对证据阈值。');
   if (onsets.length < 5 || duration < 3) return empty('片段过短或起音候选不足 5 个。');
+
+  const correlations = new Map();
+  const fit = bpm => {
+    const lag = Math.round(60 / bpm / hopSeconds);
+    if (!correlations.has(lag)) correlations.set(lag, periodicityAt(novelty, lag));
+    return { bpm, ...phaseFit(onsets, bpm), ...correlations.get(lag) };
+  };
+  const usableSignal = candidate => onsets.length / (duration * candidate.bpm / 60) >= 0.2 && candidate.periodicity >= 0.05;
+  const selected = (candidate, candidates, clusters, confidence, status, reason) => ({
+    bpm: candidate.bpm, status, source, confidence: round(confidence),
+    periodSeconds: 60 / candidate.bpm, phaseSeconds: candidate.phaseSeconds,
+    alignment: candidate.alignment, autocorrelation: candidate.autocorrelation, periodicity: candidate.periodicity,
+    candidates, clusters, evidence,
+    ambiguities: [{ bpm: candidate.bpm / 2, relation: 'half' }, { bpm: candidate.bpm * 2, relation: 'double' }], reason,
+  });
+  if (options.bpm !== undefined) {
+    const candidate = fit(options.bpm);
+    const covered = onsets.length / (duration * candidate.bpm / 60) >= 0.2;
+    // A known grid can be phased from sparse downbeats even when intervening beats have no onset.
+    if (!covered || (candidate.periodicity < 0.05 && candidate.alignment < 0.3)) return empty('已记录提供的 BPM，但音频没有足够的周期或相位证据；不生成任意起点网格。');
+    const confidence = clamp01(0.65 * candidate.alignment + 0.35 * candidate.periodicity);
+    return selected(candidate, [candidate], [], confidence, confidence >= 0.6 ? 'estimated' : 'low-confidence', 'BPM 来自所记录的外部依据；相位为机器拟合，仍需人工核对。');
+  }
 
   // Short-distance onset pairs vote for plausible subdivisions. This cannot decide a musical metre.
   const bins = new Map();
@@ -47,55 +123,48 @@ function estimateTempo(onsets, novelty, hopSeconds, duration, peakRms) {
   const maxWeight = Math.max(...Array.from(bins.values(), bin => bin.weight));
   const candidates = [];
   for (const bin of bins.values()) {
-    const period = 60 / bin.bpm;
-    let x = 0;
-    let y = 0;
-    let totalStrength = 0;
-    for (const onset of onsets) {
-      const angle = 2 * Math.PI * onset.at / period;
-      x += Math.cos(angle) * onset.strength;
-      y += Math.sin(angle) * onset.strength;
-      totalStrength += onset.strength;
-    }
-    const alignment = Math.hypot(x, y) / totalStrength;
-    let phase = Math.atan2(y, x) * period / (2 * Math.PI);
-    phase = ((phase % period) + period) % period;
-    const phaseSeconds = Math.min(round(phase), period - Number.EPSILON);
-    const lag = Math.round(period / hopSeconds);
-    let cross = 0;
-    let leftPower = 0;
-    let rightPower = 0;
-    for (let i = lag; i < novelty.length; i++) {
-      cross += novelty[i] * novelty[i - lag];
-      leftPower += novelty[i] * novelty[i];
-      rightPower += novelty[i - lag] * novelty[i - lag];
-    }
-    const autocorrelation = leftPower && rightPower ? clamp01(cross / Math.sqrt(leftPower * rightPower)) : 0;
+    const candidate = fit(bin.bpm);
     const vote = bin.weight / maxWeight;
-    const score = 0.55 * vote + 0.25 * autocorrelation + 0.2 * alignment;
-    candidates.push({ bpm: bin.bpm, vote: round(vote), intervalVotes: bin.intervalVotes, autocorrelation: round(autocorrelation), phaseSeconds, alignment: round(alignment), score });
+    const score = 0.55 * vote + 0.25 * candidate.autocorrelation + 0.2 * candidate.alignment;
+    candidates.push({ ...candidate, vote: round(vote), intervalVotes: bin.intervalVotes, score });
   }
   candidates.sort((a, b) => b.score - a.score || b.vote - a.vote || a.bpm - b.bpm);
-  const best = candidates[0];
-  const confidence = clamp01(0.45 * best.alignment + 0.35 * best.autocorrelation + 0.2 * best.vote);
   const publicCandidates = candidates.slice(0, 8).map(({ score, ...candidate }) => candidate);
-  if (best.alignment < 0.6 || best.autocorrelation < 0.2 || best.intervalVotes < 4 || confidence < 0.6) {
-    return { ...empty('候选投票或周期一致性不足；请人工听辨。'), candidates: publicCandidates };
+
+  // Use fixed anchors rather than transitive chaining, which could collapse unrelated BPMs into one cluster.
+  const unassigned = new Set(candidates);
+  const groups = [];
+  for (const anchor of candidates) {
+    if (!unassigned.has(anchor)) continue;
+    const members = candidates.filter(candidate => unassigned.has(candidate) && Math.abs(candidate.bpm - anchor.bpm) / anchor.bpm <= 0.03);
+    members.forEach(candidate => unassigned.delete(candidate));
+    const range = { min: Math.min(...members.map(candidate => candidate.bpm)), max: Math.max(...members.map(candidate => candidate.bpm)) };
+    const weight = members.reduce((sum, candidate) => sum + candidate.vote, 0);
+    let refined = fit(anchor.bpm);
+    // Refit inside the supported range to avoid phase drift caused by the 0.5 BPM voting bins.
+    for (let tenth = Math.ceil(range.min * 10); tenth <= Math.floor(range.max * 10); tenth++) {
+      const candidate = fit(tenth / 10);
+      if (candidate.alignment > refined.alignment) refined = candidate;
+    }
+    groups.push({ ...refined, range, anchorBpm: anchor.bpm, weight, intervalVotes: members.reduce((sum, candidate) => sum + candidate.intervalVotes, 0), members: members.map(({ score, ...candidate }) => candidate) });
   }
-  return {
-    bpm: best.bpm,
-    confidence: round(confidence),
-    periodSeconds: 60 / best.bpm,
-    phaseSeconds: best.phaseSeconds,
-    candidates: publicCandidates,
-    ambiguities: [{ bpm: best.bpm / 2, relation: 'half' }, { bpm: best.bpm * 2, relation: 'double' }],
-    reason: '能量起音间隔投票、包络自相关与相位一致性共同支持该候选；仍需人工核对半速/双速。',
-  };
+  const maxClusterWeight = Math.max(...groups.map(group => group.weight));
+  const clusters = groups.map(({ weight, ...group }) => {
+    const vote = round(weight / maxClusterWeight);
+    return { ...group, vote, score: 0.55 * vote + 0.25 * group.autocorrelation + 0.2 * group.alignment };
+  }).sort((a, b) => b.score - a.score || a.bpm - b.bpm);
+  const publicClusters = clusters.slice(0, 8).map(({ score, ...cluster }) => cluster);
+  const best = clusters.find(candidate => usableSignal(candidate) && candidate.autocorrelation >= 0.15 && candidate.intervalVotes >= 8 && candidate.vote >= 0.2);
+  if (!best) return { ...empty('候选投票或去均值周期一致性不足；请人工听辨。'), candidates: publicCandidates, clusters: publicClusters };
+  const confidence = clamp01(0.45 * best.alignment + 0.35 * best.autocorrelation + 0.2 * best.vote);
+  const strong = best.alignment >= 0.6 && best.autocorrelation >= 0.2 && confidence >= 0.6;
+  return selected(best, publicCandidates, publicClusters, strong ? confidence : Math.min(0.59, confidence), strong ? 'estimated' : 'low-confidence', strong ? '邻近候选的周期与相位共同支持网格；仍需人工核对半速/双速。' : '间隔投票与周期证据支持候选，但相位或自相关偏弱；网格仅供 draft 分镜试排与人工复核。');
 }
 
 /** Analyze already-cut mono PCM. sourceOffset is metadata; every returned time uses the clip clock. */
 export function analyzePcm(samples, options = {}) {
   const { sampleRate = 8000, sourceOffset = 0, windowSeconds = 0.02, hopSeconds = 0.01 } = options;
+  validateBpmOptions(options);
   validateRate(sampleRate);
   finiteOption(sourceOffset, 'sourceOffset');
   finiteOption(windowSeconds, 'windowSeconds', { positive: true });
@@ -155,6 +224,15 @@ export function analyzePcm(samples, options = {}) {
       pauseMaxRms = 0;
     }
   }
+  const tempo = estimateTempo(onsets, novelty, actualHop, duration, peakRms, options);
+  const beats = [];
+  if (tempo.bpm !== null) {
+    for (let n = 0; ; n++) {
+      const at = round(tempo.phaseSeconds + n * tempo.periodSeconds);
+      if (at >= duration) break;
+      beats.push(at);
+    }
+  }
   return {
     schemaVersion: 1,
     status: 'draft',
@@ -171,7 +249,8 @@ export function analyzePcm(samples, options = {}) {
     },
     pauses,
     onsets,
-    tempo: estimateTempo(onsets, novelty, actualHop, duration, peakRms),
+    tempo,
+    beats,
     warnings: [
       '全部结果为 draft 机器推定，不代表听辨歌词、演唱词时间或 verified 节拍。',
       '低能量停顿可能只属于伴奏；能量起音可能来自打击乐或混音，不能用于断言歌词边界。',
@@ -185,7 +264,7 @@ export function analyzePcm(samples, options = {}) {
 
 /** Decode with bounded async stdout consumption: no shell, API, dependency download, or unbounded output. */
 export async function decodeAudio(input, options = {}) {
-  const { sampleRate = 8000, start = 0, duration, ffmpegPath = 'ffmpeg', maxPcmBytes = sampleRate * MAX_SECONDS * 4, timeoutMs = 120000 } = options;
+  const { sampleRate = 8000, start = 0, duration, ffmpegPath = process.env.FFMPEG_PATH ?? 'ffmpeg', maxPcmBytes = sampleRate * MAX_SECONDS * 4, timeoutMs = 120000 } = options;
   validateRate(sampleRate);
   finiteOption(start, 'start');
   if (duration !== undefined) {
@@ -254,8 +333,8 @@ export async function decodeAudio(input, options = {}) {
 
 export function parseArgs(args) {
   if (args.length === 1 && ['--help', '-h'].includes(args[0])) return { help: true };
-  const parsed = { input: undefined, start: 0, duration: undefined, out: undefined, sampleRate: 8000, ffmpegPath: 'ffmpeg' };
-  const names = { '--start': 'start', '--duration': 'duration', '--out': 'out', '--sample-rate': 'sampleRate', '--ffmpeg': 'ffmpegPath' };
+  const parsed = { input: undefined, start: 0, duration: undefined, out: undefined, sampleRate: 8000, ffmpegPath: process.env.FFMPEG_PATH ?? 'ffmpeg' };
+  const names = { '--start': 'start', '--duration': 'duration', '--out': 'out', '--sample-rate': 'sampleRate', '--ffmpeg': 'ffmpegPath', '--bpm': 'bpm', '--bpm-source': 'bpmSource', '--bpm-evidence': 'bpmEvidence' };
   const seen = new Set();
   for (let i = 0; i < args.length; i++) {
     const argument = args[i];
@@ -266,7 +345,7 @@ export function parseArgs(args) {
       seen.add(name);
       const value = args[++i];
       if (value === undefined || value.startsWith('--') || !value.trim()) throw new Error(`参数 ${argument} 缺少值。`);
-      parsed[name] = ['start', 'duration', 'sampleRate'].includes(name) ? Number(value) : value;
+      parsed[name] = ['start', 'duration', 'sampleRate', 'bpm'].includes(name) ? Number(value) : value;
     } else if (parsed.input === undefined) parsed.input = argument;
     else throw new Error('用法需要且仅需要一个音频输入路径。');
   }
@@ -277,13 +356,17 @@ export function parseArgs(args) {
     if (parsed.duration > MAX_SECONDS) throw new Error(`duration 不得超过 ${MAX_SECONDS} 秒。`);
   }
   if (![8000, 16000].includes(parsed.sampleRate)) throw new Error('参数 --sample-rate 必须为 8000 或 16000。');
+  validateBpmOptions(parsed);
   return parsed;
 }
 
 const usage = `用法：node analyze-audio.mjs <audio> [--start 秒] [--duration 秒] [--out report.json]
       [--sample-rate 8000|16000] [--ffmpeg 可执行文件路径]
+      [--bpm 已知BPM] [--bpm-source user-provided|metadata] [--bpm-evidence 来源依据]
 示例：node analyze-audio.mjs "song with spaces.mp3" --start 37.2 --duration 12 --out report.json
+已知速度：--bpm 110；曲目元数据：--bpm 110 --bpm-source metadata --bpm-evidence "曲目页URL及110 BPM记录"
 仅用本机 ffmpeg 与 Node 内置模块。默认 8 kHz 单声道 float PCM。
+--ffmpeg 优先于 FFMPEG_PATH；未指定时使用 PATH。显式无效路径会失败。
 全部结果为 draft 机器候选，不能声称听辨歌词或 verified 节拍。
 所有时点为成片秒；sourceOffset 保存 --start。网格：phaseSeconds + n * 60 / bpm。
 一次最多分析 600 秒；超长输入会拒绝，请指定片段。PCM 上限为 38.4 MB（16 kHz），
@@ -300,7 +383,7 @@ async function main(args) {
       if (normalize(inputPath) === normalize(outputPath)) throw new Error('报告输出不能覆盖源音频。');
     }
     const samples = await decodeAudio(inputPath, options);
-    const report = analyzePcm(samples, { sampleRate: options.sampleRate, sourceOffset: options.start });
+    const report = analyzePcm(samples, { sampleRate: options.sampleRate, sourceOffset: options.start, bpm: options.bpm, bpmSource: options.bpmSource, bpmEvidence: options.bpmEvidence });
     const json = JSON.stringify(report, null, 2) + '\n';
     if (options.out) {
       const outputPath = resolve(options.out);
