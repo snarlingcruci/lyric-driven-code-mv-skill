@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "timebase": "clip",
+  "project": {
+    "fps": 30,
+    "duration": 12,
+    "sourceOffset": 37.2,
+    "width": 1920,
+    "height": 1080,
+    "virtualWidth": 384,
+    "virtualHeight": 216,
+    "seed": "paper-boat-01",
+    "audio": { "path": "assets/song.wav", "timebase": "source" }
+  },
+  "note": "原创示例句与演示时点，没有附带真实音频；音乐需换歌后试听核对。",
+  "lyrics": [
+    { "id": "line-1", "start": 0.8, "end": 3.8, "text": "小小纸船，停在远方的岸前" },
+    { "id": "line-2", "start": 7.8, "end": 10.8, "text": "小小纸船，停在远方的岸前" }
+  ],
+  "music": {
+    "status": "illustrative",
+    "beats": [1.0, 2.5, 3.5, 8.0, 9.5, 10.5],
+    "sections": [
+      { "id": "first-phrase", "start": 0, "end": 6 },
+      { "id": "repeat-phrase", "start": 6, "end": 12 }
+    ]
+  },
+  "actors": [
+    { "id": "p1", "costumes": ["blue-coat"] },
+    { "id": "p2", "costumes": ["coral-coat"] }
+  ],
+  "props": ["paper-boat", "near-dock", "far-dock", "ice-barrier", "lantern"],
+  "scenes": [
+    {
+      "id": "send-and-stop",
+      "start": 0,
+      "end": 6,
+      "meaning": "想把心意送往远方，却受距离阻隔",
+      "location": "蓝色河岸与对岸灯窗",
+      "objective": "让纸船抵达对岸",
+      "action": "p1 放船，纸船向右漂移并撞上冰障；角色望向远岸",
+      "feedback": "船下方格涟漪，路线点亮后断裂，显示未抵达",
+      "outcome": "纸船停在冰障前，p1 仍在近岸，p2 仍在远岸",
+      "lyricIds": ["line-1"],
+      "actors": [{ "id": "p1", "costume": "blue-coat" }],
+      "props": ["paper-boat", "near-dock", "far-dock", "ice-barrier"],
+      "events": [
+        { "at": 0.8, "action": "p1 把纸船放到水面", "hud": "寄送中" },
+        { "at": 1.0, "action": "落水涟漪扩散，纸船开始漂移" },
+        { "at": 3.5, "action": "纸船触碰冰障，路线最后一格断裂", "hud": "未抵达" },
+        { "at": 4.5, "action": "p1 看向远岸，保持结果并留白" }
+      ],
+      "exitTransition": "沿河横移到另一岸，保留搁浅纸船作为连续性线索"
+    },
+    {
+      "id": "other-bank-sees-light",
+      "start": 6,
+      "end": 12,
+      "meaning": "重复未抵达的遗憾，同时揭示另一方也在等待",
+      "location": "同一条河的远岸视角",
+      "objective": "p2 寻找河上的来信",
+      "action": "p2 走向码头，看见冰障前的船；p1 在远景举起提灯",
+      "feedback": "望远镜圆窗看见纸船，随后远景灯光亮起，保持距离标记",
+      "outcome": "p2 发现有人守候，纸船仍未送达；形成新信息而保留歌曲的阻隔",
+      "lyricIds": ["line-2"],
+      "actors": [
+        { "id": "p2", "costume": "coral-coat" },
+        { "id": "p1", "costume": "blue-coat" }
+      ],
+      "props": ["paper-boat", "near-dock", "far-dock", "ice-barrier", "lantern"],
+      "events": [
+        { "at": 6.2, "action": "p2 进入远岸码头" },
+        { "at": 7.8, "action": "p2 向冰障方向观察", "hud": "寻找来信" },
+        { "at": 8.0, "action": "圆窗放大此前搁浅的同一艘纸船" },
+        { "at": 9.5, "action": "p1 在远景举灯，光映在水面" },
+        { "at": 10.5, "action": "p2 回望灯光", "hud": "看见灯光，仍未抵达" },
+        { "at": 11.0, "action": "字幕结束，保留水面与两地灯光" }
+      ],
+      "exitTransition": "末段缓慢像素消隐，保留水面最后一拍"
+    }
+  ]
+}
