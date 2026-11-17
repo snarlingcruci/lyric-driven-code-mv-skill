@@ -19,12 +19,36 @@
       "use": "demo"
     }
   },
-  "note": "原创演示文案、代码合成节奏与演示时点。此 JSON 展示分镜格式；starter 使用自己的 SCENES/CAPTIONS，不自动读取此文件。替换歌曲时同步修改分镜与渲染工程。",
+  "note": "原创演示文案、代码合成节奏与演示时点。starter --storyboard直接读取项目、字幕、镜头边界与转场；scene.id对应SCENE_RENDERERS画法，事件动作由画法实现。",
   "lyrics": [
-    { "id": "line-1", "start": 0.45, "end": 2.8, "text": "送一盏小灯到对岸" },
-    { "id": "line-water", "start": 3, "end": 5, "text": "水流拐弯，我松开手" },
-    { "id": "line-2", "start": 6.3, "end": 8.5, "text": "送一盏小灯到对岸" },
-    { "id": "line-reply", "start": 8.7, "end": 11.7, "text": "未能抵达，也有回光" }
+    {
+      "id": "line-1",
+      "start": 0.45,
+      "end": 2.8,
+      "text": "送一盏小灯到对岸",
+      "en": "Send a small light across."
+    },
+    {
+      "id": "line-water",
+      "start": 3,
+      "end": 5,
+      "text": "水流拐弯，我松开手",
+      "en": "The current turns; I let it go."
+    },
+    {
+      "id": "line-2",
+      "start": 6.3,
+      "end": 8.5,
+      "text": "送一盏小灯到对岸",
+      "en": "Send a small light across."
+    },
+    {
+      "id": "line-reply",
+      "start": 8.7,
+      "end": 11.7,
+      "text": "未能抵达，也有回光",
+      "en": "Still apart, our lights reply."
+    }
   ],
   "music": {
     "status": "illustrative",
@@ -33,17 +57,65 @@
       "method": "模板按固定半秒间隔生成原创节奏；字幕与动作时点为演示设计",
       "limitations": "不对应真实歌曲或演唱；没有人声逐词对齐，也未宣称人工核听真实音乐"
     },
-    "beats": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5, 6, 6.5, 7, 7.5, 8, 8.5, 9, 9.5, 10, 10.5, 11, 11.5],
+    "beats": [
+      0,
+      0.5,
+      1,
+      1.5,
+      2,
+      2.5,
+      3,
+      3.5,
+      4,
+      4.5,
+      5,
+      5.5,
+      6,
+      6.5,
+      7,
+      7.5,
+      8,
+      8.5,
+      9,
+      9.5,
+      10,
+      10.5,
+      11,
+      11.5
+    ],
     "sections": [
-      { "id": "first-phrase", "start": 0, "end": 6 },
-      { "id": "repeat-phrase", "start": 6, "end": 12 }
+      {
+        "id": "first-phrase",
+        "start": 0,
+        "end": 6
+      },
+      {
+        "id": "repeat-phrase",
+        "start": 6,
+        "end": 12
+      }
     ]
   },
   "actors": [
-    { "id": "p1", "costumes": ["coral-coat"] },
-    { "id": "p2", "costumes": ["teal-coat"] }
+    {
+      "id": "p1",
+      "costumes": [
+        "coral-coat"
+      ]
+    },
+    {
+      "id": "p2",
+      "costumes": [
+        "teal-coat"
+      ]
+    }
   ],
-  "props": ["paper-boat", "boat-light", "near-lamp", "far-lamp"],
+  "props": [
+    "paper-boat",
+    "boat-light",
+    "near-lamp",
+    "far-lamp"
+  ],
   "scenes": [
     {
       "id": "send",
@@ -55,15 +127,54 @@
       "action": "p1 推船并松手，载灯纸船沿弯流向河心漂去",
       "feedback": "纸船位移和水面倒影说明寄送开始，远岸灯仍暗",
       "outcome": "纸船到达河心，尚未抵达；两岸人物仍分开",
-      "lyricIds": ["line-1", "line-water"],
-      "actors": [{ "id": "p1", "costume": "coral-coat" }, { "id": "p2", "costume": "teal-coat" }],
-      "props": ["paper-boat", "boat-light", "near-lamp", "far-lamp"],
-      "events": [
-        { "at": 1.3, "action": "p1 开始松手，纸船离开左岸", "lyricIds": ["line-1"] },
-        { "at": 3, "action": "纸船经过弯流，继续向河心漂移", "lyricIds": ["line-water"] },
-        { "at": 5, "action": "保持纸船未抵达的结果，为切换视角留白" }
+      "lyricIds": [
+        "line-1",
+        "line-water"
       ],
-      "exit": { "type": "ripple", "dur": 0.9, "origin": [0.55, 0.62] },
+      "actors": [
+        {
+          "id": "p1",
+          "costume": "coral-coat"
+        },
+        {
+          "id": "p2",
+          "costume": "teal-coat"
+        }
+      ],
+      "props": [
+        "paper-boat",
+        "boat-light",
+        "near-lamp",
+        "far-lamp"
+      ],
+      "events": [
+        {
+          "at": 1.3,
+          "action": "p1 开始松手，纸船离开左岸",
+          "lyricIds": [
+            "line-1"
+          ]
+        },
+        {
+          "at": 3,
+          "action": "纸船经过弯流，继续向河心漂移",
+          "lyricIds": [
+            "line-water"
+          ]
+        },
+        {
+          "at": 5,
+          "action": "保持纸船未抵达的结果，为切换视角留白"
+        }
+      ],
+      "exit": {
+        "type": "ripple",
+        "dur": 0.9,
+        "origin": [
+          0.55,
+          0.62
+        ]
+      },
       "exitTransition": "波纹揭示右岸视角，下一镜固定 local=0 预卷"
     },
     {
@@ -76,16 +187,57 @@
       "action": "p2 伸手，纸船被弯流推回；改用岸灯回应",
       "feedback": "纸船回退，右岸灯亮起，水面产生两地光的联系",
       "outcome": "纸船仍未抵达，两岸灯光隔水相望",
-      "lyricIds": ["line-2", "line-reply"],
-      "actors": [{ "id": "p2", "costume": "teal-coat" }, { "id": "p1", "costume": "coral-coat" }],
-      "props": ["paper-boat", "boat-light", "near-lamp", "far-lamp"],
-      "events": [
-        { "at": 8.3, "action": "p2 伸手尝试接船", "lyricIds": ["line-2"] },
-        { "at": 9.1, "action": "弯流使纸船在触岸前回退", "lyricIds": ["line-reply"] },
-        { "at": 9.4, "action": "p2 点亮岸灯回应，保持未抵达的事实", "lyricIds": ["line-reply"] },
-        { "at": 11.7, "action": "字幕结束，留下河水与两岸灯光" }
+      "lyricIds": [
+        "line-2",
+        "line-reply"
       ],
-      "exit": { "type": "cut", "dur": 0 },
+      "actors": [
+        {
+          "id": "p2",
+          "costume": "teal-coat"
+        },
+        {
+          "id": "p1",
+          "costume": "coral-coat"
+        }
+      ],
+      "props": [
+        "paper-boat",
+        "boat-light",
+        "near-lamp",
+        "far-lamp"
+      ],
+      "events": [
+        {
+          "at": 8.3,
+          "action": "p2 伸手尝试接船",
+          "lyricIds": [
+            "line-2"
+          ]
+        },
+        {
+          "at": 9.1,
+          "action": "弯流使纸船在触岸前回退",
+          "lyricIds": [
+            "line-reply"
+          ]
+        },
+        {
+          "at": 9.4,
+          "action": "p2 点亮岸灯回应，保持未抵达的事实",
+          "lyricIds": [
+            "line-reply"
+          ]
+        },
+        {
+          "at": 11.7,
+          "action": "字幕结束，留下河水与两岸灯光"
+        }
+      ],
+      "exit": {
+        "type": "cut",
+        "dur": 0
+      },
       "exitTransition": "片段结束，无额外第三镜或黑场"
     }
   ]
