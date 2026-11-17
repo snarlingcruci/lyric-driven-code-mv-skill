@@ -13,7 +13,7 @@ description: Use when a music video needs code animation that responds to lyric 
 2. **建立两条时间线。** 标注句起止、段落、重要重音和留白；语义表记录人物关系、意象和动作。读 [时间与分镜](references/storyboard-and-timing.md)，统一成片坐标与原曲偏移。已有 FFmpeg 时先用 `scripts/analyze-audio.mjs` 生成离线能量、停顿、起音和 BPM/相位候选；不把候选当歌词对齐。按下表记录证据，无法试听也可完成透明标注的草稿。
 3. **设计任务与世界。** 每镜写目标→行动→反馈→结果。反复意象安排首次出现、变化和再出现；重复副歌增加信息或后果。保留人物身份、装束和道具来龙去脉。像素美术、摄像机、字幕和双人叙事读 [像素世界与演出](references/pixel-game-visuals.md)。
 4. **选择一种实现路线。** 沿用用户指定框架及现有工程。无框架且需要最小可运行工程时，复制 `assets/templates/starter/`：仅 Node 内置模块与 FFmpeg 即可预览和导出。HTML 动效工程可采用 HyperFrames，React 工程优先 Remotion。实现前读 [依赖与交付](references/dependencies-and-delivery.md)，列出必需项、已有项和可选项；安装包、下载浏览器/模型/字体、使用 API 或付费服务前先说明并沿用已有授权。
-5. **完成代表片段。** 新作品先完成约 10–15 秒，包含人物动作、歌词意象任务、反馈变化及转场；用户指定其他长度或修改已有工程时按其范围。分离场景画法与分镜数据，每帧由时间直接求值，粒子固定种子。出口转场占前镜尾段，下一镜固定 `local=0` 预卷，不增加总时长。执行结构校验和 `scripts/qa.mjs` 的重复、逆序、乱序像素比较。
+5. **完成代表片段。** 新作品先完成约 10–15 秒，包含人物动作、歌词意象任务、反馈变化及转场；用户指定其他长度或修改已有工程时按其范围。分镜 JSON 作为时长、歌词、场景边界、转场及音乐状态的真源，代码按 `scene.id` 提供画法。每帧由时间直接求值，粒子固定种子。出口转场占前镜尾段，下一镜固定 `local=0` 预卷，不增加总时长。执行结构校验和 `scripts/qa.mjs` 的重复、逆序、乱序像素比较。
 6. **扩展与验收。** 先预览代表片段，核对动作峰值、句尾、转场、字幕与摄像机边缘，再扩展已授权范围。导出后执行 FFprobe、完整解码、接触表和关键帧检查；具备播放条件时完整播放，逐项记录真实完成的检查。不能试听时交付 `draft`，明确待核对落点，不能声称音画已核对。
 
 ## 音乐证据与交付阶段
@@ -21,14 +21,14 @@ description: Use when a music video needs code animation that responds to lyric 
 | `music.status` | 条件 | 交付义务 |
 |---|---|---|
 | `illustrative` | 自编时点、占位音轨或原创演示 | 开头显示“演示时点”，记录 `presentationNotice:true`；说明不是对应真实歌曲的对齐结果 |
-| `draft` | 已有音频，机器分析或未经试听的标注 | `evidence.method` 写推定方法，`limitations` 写误差来源和待核对项；允许交付草稿成片 |
+| `draft` | 已有音频，机器分析或未经试听的标注 | `evidence.method` 写推定方法，`limitations` 写误差来源；`pendingChecks[]` 记录具体时间区间与未确认内容，允许交付草稿成片 |
 | `verified` | 人工核对了相关音频、歌词与关键落点 | 记录 `evidence.reviewer`、含时区完整时间戳 `reviewedAt`（如 `2026-11-17T08:00:00Z`），交付说明写核对范围 |
 
 自动分析不能升级为 `verified`。逐字时点按句长均分时，字幕说明为视觉填充；BPM 的半速/双速歧义、伴奏起音、拖音及源偏移均可能造成误差。缺少音频时先交付 `illustrative` 分镜或演示，不因无法试听无限等待。状态与授权是两项独立条件，草稿状态不能代替发布许可。
 
 ## 模板与命令
 
-复制 [原创 12 秒分镜](assets/storyboard-example.json) 并替换内容。最小工程见 [starter 说明](assets/templates/starter/README.md)，自带纸船、两岸灯光、尾段转场、高分辨率字幕及本地生成的原创节奏。模板不自动读取 JSON；真实歌曲按模板说明改音轨输入、SCENES/CAPTIONS、画法与演示提示，并同步分镜。
+复制 [原创 12 秒分镜](assets/storyboard-example.json) 并替换内容。最小工程见 [starter 说明](assets/templates/starter/README.md)，自带纸船、两岸灯光、尾段转场、高分辨率字幕及本地生成的原创节奏。`export.mjs --storyboard` 读取分镜配置；真实歌曲用 `--audio` 指定文件，按 `scene.id` 调整或注册画法。字幕与音乐状态提示由 JSON 生成，无需手工维护另一套时点。
 
 以下在 skill 目录运行；其他目录使用脚本的绝对路径：
 
@@ -37,10 +37,11 @@ node scripts/analyze-audio.mjs path/to/song.wav --start 37.2 --duration 12 --out
 node scripts/validate-storyboard.mjs assets/storyboard-example.json
 node scripts/validate-storyboard.mjs path/to/storyboard.json --delivery
 node scripts/qa.mjs assets/templates/starter/frame.mjs --duration 12 --fps 30 --storyboard assets/storyboard-example.json --out work/qa.json
-node assets/templates/starter/export.mjs --out work/demo.mp4
+node assets/templates/starter/export.mjs --storyboard assets/storyboard-example.json --out work/demo.mp4
+node assets/templates/starter/export.mjs --storyboard path/to/storyboard.json --audio path/to/song.wav --out work/mv.mp4
 ```
 
-校验器保留 `validateStoryboard(data) → errors[]`，新增 `analyzeStoryboard(data,{beatToleranceMs,delivery}) → {errors,warnings}`。普通提示不改变退出码，`--strict` 将提示视为失败，`--delivery` 检查发布记录。跨镜歌词、显式踩拍事件、HUD 支撑及授权缺项都有可定位的提示；工具不证明语义正确、许可有效或实际音画同步。
+校验器保留 `validateStoryboard(data) → errors[]`，提供 `analyzeStoryboard(data,{beatToleranceMs,delivery}) → {errors,warnings}`。普通提示不改变退出码；`--strict` 只是将结构检查中的警告视为失败，通过不证明可发布或 `verified`。`--delivery` 检查许可记录、音乐证据及草稿待核对清单，字段规则见时间与分镜参考。跨镜歌词、显式踩拍事件、HUD 支撑及授权缺项都有可定位的提示；工具不证明语义正确、许可有效或实际音画同步。
 
 ## 完成标准
 
